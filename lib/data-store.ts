@@ -29,17 +29,40 @@ export interface TaskRecord {
 }
 
 const LOCAL_TASKS_FILE = path.join(process.cwd(), 'prisma', 'tasks_local.json');
+const LOCAL_CUSTOM_EMPLOYEES_FILE = path.join(process.cwd(), 'prisma', 'employees_custom.json');
 
-// Ingest employees directly from Excel
+function loadCustomLocalEmployees(): EmployeeRecord[] {
+  if (fs.existsSync(LOCAL_CUSTOM_EMPLOYEES_FILE)) {
+    try {
+      const data = fs.readFileSync(LOCAL_CUSTOM_EMPLOYEES_FILE, 'utf-8');
+      return JSON.parse(data);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function saveCustomLocalEmployees(employees: EmployeeRecord[]) {
+  try {
+    fs.writeFileSync(LOCAL_CUSTOM_EMPLOYEES_FILE, JSON.stringify(employees, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save custom local employees:', e);
+  }
+}
+
+// Ingest employees directly from Excel and local custom store
 export function getLocalEmployees(): EmployeeRecord[] {
+  const excelEmployees: EmployeeRecord[] = [];
   const excelPath = path.join(process.cwd(), 'prisma', 'Employee Data.xlsx');
+
   if (fs.existsSync(excelPath)) {
     try {
       const workbook = XLSX.readFile(excelPath);
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rawData = XLSX.utils.sheet_to_json<any>(sheet);
 
-      return rawData.map((row) => {
+      rawData.forEach((row) => {
         const cleanRow: Record<string, any> = {};
         for (const [k, v] of Object.entries(row)) {
           cleanRow[String(k).trim()] = v;
@@ -51,23 +74,37 @@ export function getLocalEmployees(): EmployeeRecord[] {
         const isDirector = roleStr.includes('director') || empCode.startsWith('D');
         const rawPassword = String(cleanRow['Password'] || '').trim();
 
-        return {
-          id: empCode,
-          employeeCode: empCode,
-          fullName: fullName || empCode,
-          designation: String(cleanRow['Role'] || 'Staff').trim(),
-          role: isDirector ? 'DIRECTOR' : 'EMPLOYEE',
-          email: String(cleanRow['Email ID'] || '').trim().toLowerCase(),
-          phoneNumber: String(cleanRow['Contact Number'] || '').trim(),
-          password: rawPassword,
-        };
+        if (empCode && fullName) {
+          excelEmployees.push({
+            id: empCode,
+            employeeCode: empCode,
+            fullName: fullName || empCode,
+            designation: String(cleanRow['Role'] || 'Staff').trim(),
+            role: isDirector ? 'DIRECTOR' : 'EMPLOYEE',
+            email: String(cleanRow['Email ID'] || '').trim().toLowerCase(),
+            phoneNumber: String(cleanRow['Contact Number'] || '').trim(),
+            password: rawPassword,
+          });
+        }
       });
     } catch (e) {
       console.warn('Could not read Employee Data.xlsx, using defaults:', e);
     }
   }
 
-  return [];
+  const customEmployees = loadCustomLocalEmployees();
+  // Merge, prioritizing custom modifications
+  const empMap = new Map<string, EmployeeRecord>();
+  excelEmployees.forEach((e) => empMap.set(e.employeeCode, e));
+  customEmployees.forEach((e) => {
+    if ((e as any).isDeleted) {
+      empMap.delete(e.employeeCode);
+    } else {
+      empMap.set(e.employeeCode, e);
+    }
+  });
+
+  return Array.from(empMap.values());
 }
 
 // Initial baseline tasks (clean empty slate for production)
@@ -99,11 +136,55 @@ export function saveLocalTasks(tasks: TaskRecord[]) {
 }
 
 /**
- * Universal Data Layer: Uses Prisma if POSTGRES_PRISMA_URL is set,
+ * Self-Automated 3-Month (90-day) Task Retention Purge:
+ * Permanently removes any tasks created more than 90 days ago from both
+ * Postgres and local storage.
+ */
+export async function autoPurgeExpiredTasks(): Promise<number> {
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  let purgedCount = 0;
+
+  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
+    try {
+      const res = await prisma.task.deleteMany({
+        where: {
+          createdAt: {
+            lt: ninetyDaysAgo,
+          },
+        },
+      });
+      purgedCount += res.count;
+      if (res.count > 0) {
+        console.log(`[Lifecycle Auto-Purge] Purged ${res.count} task(s) older than 90 days from database.`);
+      }
+    } catch (e) {
+      console.warn('Auto-purge database warning:', e);
+    }
+  }
+
+  // Also purge local tasks
+  try {
+    const tasks = loadLocalTasks();
+    const remainingTasks = tasks.filter((t) => new Date(t.createdAt) >= ninetyDaysAgo);
+    if (remainingTasks.length !== tasks.length) {
+      const localDiff = tasks.length - remainingTasks.length;
+      purgedCount += localDiff;
+      saveLocalTasks(remainingTasks);
+      console.log(`[Lifecycle Auto-Purge] Purged ${localDiff} task(s) older than 90 days from local file.`);
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return purgedCount;
+}
+
+/**
+ * Universal Data Layer: Uses Prisma if database is connected,
  * otherwise falls back to the embedded local store with zero errors.
  */
 export async function getEmployees(): Promise<EmployeeRecord[]> {
-  if (process.env.POSTGRES_PRISMA_URL) {
+  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
     try {
       const dbEmployees = await prisma.user.findMany({
         where: { isActive: true },
@@ -114,6 +195,7 @@ export async function getEmployees(): Promise<EmployeeRecord[]> {
           designation: true,
           role: true,
           email: true,
+          phoneNumber: true,
         },
         orderBy: { employeeCode: 'asc' },
       });
@@ -125,6 +207,7 @@ export async function getEmployees(): Promise<EmployeeRecord[]> {
           designation: e.designation || 'Staff',
           role: e.role as any,
           email: e.email,
+          phoneNumber: e.phoneNumber || undefined,
         }));
       }
     } catch (err) {
@@ -134,7 +217,153 @@ export async function getEmployees(): Promise<EmployeeRecord[]> {
   return getLocalEmployees();
 }
 
+/**
+ * Add a new Employee or Director to the organization
+ */
+export async function createEmployee(data: {
+  employeeCode: string;
+  fullName: string;
+  designation: string;
+  role: 'DIRECTOR' | 'EMPLOYEE';
+  email: string;
+  password?: string;
+  phoneNumber?: string;
+}): Promise<EmployeeRecord> {
+  const cleanCode = data.employeeCode.trim().toUpperCase();
+  const cleanEmail = data.email.trim().toLowerCase();
+  const cleanPass = data.password?.trim() || 'Nirmaan@2026';
+
+  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
+    try {
+      const passwordHash = await bcrypt.hash(cleanPass, 10);
+      const username = `${cleanCode.toLowerCase()}.${Date.now().toString().slice(-4)}`;
+
+      const createdUser = await prisma.user.create({
+        data: {
+          employeeCode: cleanCode,
+          username,
+          email: cleanEmail,
+          fullName: data.fullName.trim(),
+          designation: data.designation.trim() || 'Staff',
+          role: data.role,
+          passwordHash,
+          phoneNumber: data.phoneNumber ? data.phoneNumber.trim() : null,
+          isActive: true,
+        },
+      });
+
+      return {
+        id: createdUser.id,
+        employeeCode: createdUser.employeeCode,
+        fullName: createdUser.fullName,
+        designation: createdUser.designation || 'Staff',
+        role: createdUser.role as any,
+        email: createdUser.email,
+        phoneNumber: createdUser.phoneNumber || undefined,
+      };
+    } catch (e: any) {
+      console.warn('Prisma createEmployee fallback:', e);
+      if (e?.code === 'P2002') {
+        throw new Error(`An account with Employee ID "${cleanCode}" or Email "${cleanEmail}" already exists.`);
+      }
+    }
+  }
+
+  // Local storage execution
+  const customList = loadCustomLocalEmployees();
+  const existing = customList.find(
+    (e) => e.employeeCode === cleanCode || e.email.toLowerCase() === cleanEmail
+  );
+  if (existing && !(existing as any).isDeleted) {
+    throw new Error(`Employee with ID ${cleanCode} or email ${cleanEmail} already exists.`);
+  }
+
+  const newEmp: EmployeeRecord = {
+    id: cleanCode,
+    employeeCode: cleanCode,
+    fullName: data.fullName.trim(),
+    designation: data.designation.trim() || 'Staff',
+    role: data.role,
+    email: cleanEmail,
+    phoneNumber: data.phoneNumber ? data.phoneNumber.trim() : undefined,
+    password: cleanPass,
+  };
+
+  const updatedList = customList.filter((e) => e.employeeCode !== cleanCode);
+  updatedList.push(newEmp);
+  saveCustomLocalEmployees(updatedList);
+
+  return newEmp;
+}
+
+/**
+ * Remove/Deactivate an Employee from the organization
+ */
+export async function deleteEmployee(identifier: string): Promise<boolean> {
+  const cleanId = identifier.trim();
+
+  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
+    try {
+      const user = await prisma.user.findFirst({
+        where: {
+          OR: [{ id: cleanId }, { employeeCode: cleanId.toUpperCase() }],
+        },
+      });
+
+      if (user) {
+        // Cascade delete tasks assigned to them to keep board clean
+        await prisma.task.deleteMany({
+          where: { assignedToId: user.id },
+        });
+
+        // Deactivate the user account
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { isActive: false },
+        });
+
+        // Delete device push subscriptions
+        await prisma.pushSubscription.deleteMany({
+          where: { userId: user.id },
+        });
+
+        return true;
+      }
+    } catch (e) {
+      console.warn('Prisma deleteEmployee fallback:', e);
+    }
+  }
+
+  // Local store execution
+  const customList = loadCustomLocalEmployees();
+  const updatedList = customList.filter(
+    (e) => e.id !== cleanId && e.employeeCode !== cleanId.toUpperCase()
+  );
+  // Mark tombstone for excel-based employees
+  updatedList.push({
+    id: cleanId,
+    employeeCode: cleanId.toUpperCase(),
+    fullName: '',
+    designation: '',
+    role: 'EMPLOYEE',
+    email: '',
+    isDeleted: true,
+  } as any);
+  saveCustomLocalEmployees(updatedList);
+
+  // Also remove their local tasks
+  const tasks = loadLocalTasks();
+  const remaining = tasks.filter(
+    (t) => t.assignedToId !== cleanId && t.assignedTo?.employeeCode !== cleanId.toUpperCase()
+  );
+  saveLocalTasks(remaining);
+
+  return true;
+}
+
 export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
+  // Trigger self-automated 3-month task retention purge on task retrieval
+  autoPurgeExpiredTasks().catch(() => null);
   if (process.env.POSTGRES_PRISMA_URL) {
     try {
       const dbTasks = await prisma.task.findMany({

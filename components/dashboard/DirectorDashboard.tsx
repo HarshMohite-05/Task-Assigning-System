@@ -29,6 +29,11 @@ import {
   Play,
   AlertCircle,
   TrendingUp,
+  UserPlus,
+  Trash2,
+  Shield,
+  RotateCcw,
+  History,
 } from 'lucide-react';
 import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
 
@@ -96,14 +101,31 @@ const TASK_TEMPLATES = [
 ];
 
 export default function DirectorDashboard({ initialTasks, employees }: DashboardProps) {
+  const [employeeList, setEmployeeList] = useState<Employee[]>(employees);
   const [tasks, setTasks] = useState<TaskItem[]>(initialTasks);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [selectedEmployeeFilter, setSelectedEmployeeFilter] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'LIST' | 'KANBAN'>('LIST');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
+  const [teamTab, setTeamTab] = useState<'LIST' | 'ADD'>('LIST');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmittingEmployee, setIsSubmittingEmployee] = useState(false);
+  const [isPurging, setIsPurging] = useState(false);
+  const [purgeNotice, setPurgeNotice] = useState<string | null>(null);
   const [activeChartTab, setActiveChartTab] = useState<'WORKLOAD' | 'STATUS'>('WORKLOAD');
+
+  // New Employee Form State
+  const [employeeFormData, setEmployeeFormData] = useState({
+    fullName: '',
+    employeeCode: '',
+    email: '',
+    designation: 'Field Technician',
+    role: 'EMPLOYEE' as 'EMPLOYEE' | 'DIRECTOR',
+    password: '',
+    phoneNumber: '',
+  });
 
   // Form State
   const [formData, setFormData] = useState({
@@ -143,7 +165,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
       }
     > = {};
 
-    employees.forEach((emp) => {
+    employeeList.forEach((emp) => {
       const code = emp.employeeCode || emp.id;
       workloadMap[code] = {
         id: emp.id,
@@ -181,7 +203,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
     ];
 
     return { total, completed, blocked, overdue, inProgress, todo, workloadData, statusChartData };
-  }, [tasks, employees]);
+  }, [tasks, employeeList]);
 
   // Filtered Task List
   const filteredTasks = useMemo(() => {
@@ -225,7 +247,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
     if (!formData.title.trim()) return;
 
     setIsSubmitting(true);
-    const assignedEmployee = employees.find(
+    const assignedEmployee = employeeList.find(
       (e) => e.id === formData.assignedToId || e.employeeCode === formData.assignedToId
     ) || {
       id: formData.assignedToId,
@@ -262,7 +284,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
       setFormData({
         title: '',
         description: '',
-        assignedToId: employees[0]?.id || 'EMP001',
+        assignedToId: employeeList[0]?.id || 'EMP001',
         priority: 'MEDIUM',
         dueDate: '',
       });
@@ -272,6 +294,80 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
       alert('Failed to assign task. Optimistic update rolled back.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Add Employee Handler
+  const handleCreateEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmittingEmployee(true);
+    try {
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(employeeFormData),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to add employee');
+
+      setEmployeeList((prev) => [...prev, data.employee]);
+      setEmployeeFormData({
+        fullName: '',
+        employeeCode: '',
+        email: '',
+        designation: 'Field Technician',
+        role: 'EMPLOYEE',
+        password: '',
+        phoneNumber: '',
+      });
+      setTeamTab('LIST');
+      alert(`✅ Success: Added ${data.employee.fullName} (${data.employee.employeeCode})`);
+    } catch (err: any) {
+      alert(`⚠️ ${err.message || 'Error creating employee'}`);
+    } finally {
+      setIsSubmittingEmployee(false);
+    }
+  };
+
+  // Delete Employee Handler
+  const handleDeleteEmployee = async (empId: string, empName: string) => {
+    if (!confirm(`Are you sure you want to remove ${empName}? This will also delete their assigned tasks.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/employees?id=${encodeURIComponent(empId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove employee');
+
+      setEmployeeList((prev) => prev.filter((e) => e.id !== empId && e.employeeCode !== empId));
+      setTasks((prev) => prev.filter((t) => t.assignedTo?.id !== empId && t.assignedTo?.employeeCode !== empId));
+    } catch (err: any) {
+      alert(`⚠️ ${err.message || 'Error deleting employee'}`);
+    }
+  };
+
+  // Manual Trigger for 3-Month Automated Retention Purge
+  const handleManualPurge = async () => {
+    setIsPurging(true);
+    setPurgeNotice(null);
+    try {
+      const res = await fetch('/api/tasks/cleanup', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setPurgeNotice(`Cleaned ${data.purgedTasks || 0} tasks older than 90 days.`);
+        const tasksRes = await fetch('/api/tasks');
+        const tasksData = await tasksRes.json();
+        if (tasksData?.tasks) setTasks(tasksData.tasks);
+      }
+    } catch {
+      setPurgeNotice('Purge check completed.');
+    } finally {
+      setIsPurging(false);
+      setTimeout(() => setPurgeNotice(null), 4000);
     }
   };
 
@@ -344,14 +440,43 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
             Executive Oversight
           </div>
           <h2 className="text-xl font-bold text-slate-800">Operational Workforce Control</h2>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-medium" title="Tasks older than 90 days are automatically deleted">
+              <History className="w-3 h-3 text-emerald-600" />
+              Auto 3-Month Purge: Active
+            </span>
+            <button
+              onClick={handleManualPurge}
+              disabled={isPurging}
+              className="text-[11px] text-slate-500 hover:text-slate-800 underline decoration-slate-300 transition"
+              title="Manually verify and clear tasks older than 90 days"
+            >
+              {isPurging ? 'Running purge...' : 'Run Purge Now'}
+            </button>
+            {purgeNotice && (
+              <span className="text-[11px] text-blue-600 font-semibold animate-fade-in">{purgeNotice}</span>
+            )}
+          </div>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-medium shadow-sm transition active:scale-95 text-sm"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Delegate New Task</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => {
+              setTeamTab('LIST');
+              setIsTeamModalOpen(true);
+            }}
+            className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-medium border border-slate-200 transition active:scale-95 text-sm"
+          >
+            <Users className="w-4 h-4 text-slate-600" />
+            <span>Manage Team ({employeeList.length})</span>
+          </button>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-medium shadow-sm transition active:scale-95 text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Delegate New Task</span>
+          </button>
+        </div>
       </div>
 
       {/* KPI Metric Strip */}
@@ -806,7 +931,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
                   onChange={(e) => setFormData({ ...formData, assignedToId: e.target.value })}
                   className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 >
-                  {employees.map((emp) => (
+                  {employeeList.map((emp) => (
                     <option key={emp.id} value={emp.id}>
                       {emp.fullName} ({emp.employeeCode} - {emp.designation})
                     </option>
@@ -874,6 +999,226 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Team Management Modal (Add / Delete Employees) */}
+      {isTeamModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Team & Staff Management</h3>
+                <p className="text-xs text-slate-500">Add new employees or remove existing team members</p>
+              </div>
+              <button
+                onClick={() => setIsTeamModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Tab navigation */}
+            <div className="flex gap-2 border-b border-slate-100 pb-3">
+              <button
+                onClick={() => setTeamTab('LIST')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                  teamTab === 'LIST'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                Current Staff ({employeeList.length})
+              </button>
+              <button
+                onClick={() => setTeamTab('ADD')}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition ${
+                  teamTab === 'ADD'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>+ Add New Member</span>
+              </button>
+            </div>
+
+            {/* Tab 1: Current Staff List */}
+            {teamTab === 'LIST' && (
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                {employeeList.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-xs">No active staff records found.</div>
+                ) : (
+                  employeeList.map((emp) => (
+                    <div
+                      key={emp.id || emp.employeeCode}
+                      className="flex items-center justify-between p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-2xl border border-slate-200 transition"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs ${
+                          (emp as any).role === 'DIRECTOR' || emp.employeeCode?.startsWith('D')
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-emerald-600 text-white'
+                        }`}>
+                          {emp.employeeCode?.slice(0, 3)}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-sm text-slate-800">{emp.fullName}</span>
+                            <span className="text-[10px] font-mono font-semibold px-2 py-0.5 bg-white border border-slate-200 rounded-md text-slate-600">
+                              {emp.employeeCode}
+                            </span>
+                            {((emp as any).role === 'DIRECTOR' || emp.employeeCode?.startsWith('D')) && (
+                              <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
+                                Director
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {emp.designation} • {(emp as any).email || 'No email registered'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteEmployee(emp.id || emp.employeeCode, emp.fullName)}
+                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition"
+                        title={`Remove ${emp.fullName}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* Tab 2: Add New Member Form */}
+            {teamTab === 'ADD' && (
+              <form onSubmit={handleCreateEmployee} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Full Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Anand Sharma"
+                      value={employeeFormData.fullName}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, fullName: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Employee Code / ID *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. EMP005 or D003"
+                      value={employeeFormData.employeeCode}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, employeeCode: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none uppercase"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Official Email *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="anand@nirmaanwatertech.com"
+                      value={employeeFormData.email}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, email: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Designation / Title *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Senior RO Technician"
+                      value={employeeFormData.designation}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, designation: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Role Access
+                    </label>
+                    <select
+                      value={employeeFormData.role}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, role: e.target.value as any })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    >
+                      <option value="EMPLOYEE">Employee (Task Stream)</option>
+                      <option value="DIRECTOR">Director (Control Center)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Contact Number
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="+91 9876543210"
+                      value={employeeFormData.phoneNumber}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, phoneNumber: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">
+                      Initial Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Default: Nirmaan@2026"
+                      value={employeeFormData.password}
+                      onChange={(e) => setEmployeeFormData({ ...employeeFormData, password: e.target.value })}
+                      className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setTeamTab('LIST')}
+                    className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl"
+                  >
+                    Back to List
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingEmployee}
+                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 text-sm font-semibold rounded-xl transition shadow-sm disabled:opacity-50"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>{isSubmittingEmployee ? 'Adding...' : 'Create & Register Member'}</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

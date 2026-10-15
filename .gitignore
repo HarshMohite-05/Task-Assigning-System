@@ -19,6 +19,7 @@ dist/
 
 # Local Runtime Data
 prisma/tasks_local.json
+prisma/employees_custom.json
 *.log
 
 # Operating System Files
