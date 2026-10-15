@@ -72,7 +72,7 @@ export default async function DirectorPage() {
             ...t,
             dueDate: t.dueDate ? new Date(t.dueDate).toISOString() : null,
           }))}
-          employees={employees}
+          employees={employees.map(({ password: _pw, ...e }) => e)}
         />
       </main>
     </div>

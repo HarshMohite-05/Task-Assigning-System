@@ -132,6 +132,11 @@ export function getLocalEmployees(): EmployeeRecord[] {
 }
 
 // Initial baseline tasks (clean empty slate for production)
+function stripPassword(e: EmployeeRecord): EmployeeRecord {
+  const { password: _pw, ...rest } = e;
+  return rest;
+}
+
 function getBaselineTasks(): TaskRecord[] {
   return [];
 }
@@ -479,7 +484,7 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
   }
   assertLocalStoreIsSafe();
 
-  const tasks = loadLocalTasks();
+  const tasks = loadLocalTasks().map((t) => ({ ...t, assignedTo: stripPassword(t.assignedTo) }));
   if (employeeId) {
     const cleanId = employeeId.trim().toUpperCase();
     return tasks.filter(
@@ -649,7 +654,7 @@ export async function createTask(data: {
     assignedToId: assignee.id,
     createdById: data.createdById || 'D001',
     createdAt: new Date().toISOString(),
-    assignedTo: assignee,
+    assignedTo: stripPassword(assignee),
   };
 
   tasks.unshift(newTask);
