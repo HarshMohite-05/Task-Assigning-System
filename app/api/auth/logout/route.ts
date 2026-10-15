@@ -12,8 +12,8 @@ function createLogoutResponse(req: NextRequest) {
     expires: new Date(0),
     maxAge: 0,
     sameSite: 'lax',
-    secure: false,
-    httpOnly: false,
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
   });
 
   return response;
@@ -28,8 +28,8 @@ export async function POST(req: NextRequest) {
       expires: new Date(0),
       maxAge: 0,
       sameSite: 'lax',
-      secure: false,
-      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      httpOnly: true,
     });
     return res;
   }

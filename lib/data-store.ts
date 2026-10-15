@@ -179,11 +179,53 @@ export async function autoPurgeExpiredTasks(): Promise<number> {
   return purgedCount;
 }
 
+let hasAttemptedSeed = false;
+
+async function ensureDatabaseSeeded() {
+  if (hasAttemptedSeed) return;
+  hasAttemptedSeed = true;
+
+  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
+    try {
+      const count = await prisma.user.count();
+      if (count === 0) {
+        console.log('[Database Setup] Auto-provisioning initial team accounts in database...');
+        const initialStaff = getLocalEmployees();
+        for (const staff of initialStaff) {
+          const passwordHash = await bcrypt.hash(staff.password || 'Nirmaan@2026', 10);
+          const nameTokens = staff.fullName.toLowerCase().split(/\s+/);
+          const username = nameTokens.length > 1 ? `${nameTokens[0]}.${nameTokens[nameTokens.length - 1]}` : nameTokens[0];
+          await prisma.user.upsert({
+            where: { employeeCode: staff.employeeCode },
+            update: {},
+            create: {
+              employeeCode: staff.employeeCode,
+              username,
+              email: staff.email,
+              fullName: staff.fullName,
+              designation: staff.designation,
+              role: staff.role as any,
+              passwordHash,
+              phoneNumber: staff.phoneNumber || null,
+              isActive: true,
+            },
+          }).catch(() => null);
+        }
+        console.log('[Database Setup] Successfully provisioned team members in database.');
+      }
+    } catch {
+      // Table might not be pushed yet or connection pending
+    }
+  }
+}
+
 /**
  * Universal Data Layer: Uses Prisma if database is connected,
  * otherwise falls back to the embedded local store with zero errors.
  */
 export async function getEmployees(): Promise<EmployeeRecord[]> {
+  await ensureDatabaseSeeded();
+
   if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
     try {
       const dbEmployees = await prisma.user.findMany({
@@ -536,6 +578,8 @@ export async function authenticateUser(identifier: string, rawPassword: string):
   const cleanId = identifier.trim().toLowerCase();
   const cleanPass = rawPassword.trim();
   if (!cleanId || !cleanPass) return null;
+
+  await ensureDatabaseSeeded();
 
   // 1. If Postgres database is configured, authenticate securely against password_hash
   if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
