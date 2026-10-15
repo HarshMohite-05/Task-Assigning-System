@@ -7,6 +7,9 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(clients.claim());
 });
 
+// Pass-through fetch handler (required by Chrome's installability check on some versions)
+self.addEventListener('fetch', () => {});
+
 self.addEventListener('push', (event) => {
   if (!event.data) return;
 
