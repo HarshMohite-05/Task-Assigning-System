@@ -1,0 +1,106 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  DIRECTOR
+  EMPLOYEE
+}
+
+enum TaskStatus {
+  TO_DO
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id                String             @id @default(cuid())
+  employeeCode      String             @unique @map("employee_code")
+  username          String             @unique
+  email             String             @unique
+  fullName          String             @map("full_name")
+  designation       String?            @default("Staff")
+  organization      String?            @default("Nirmaan Water Tech")
+  passwordHash      String             @map("password_hash")
+  role              Role               @default(EMPLOYEE)
+  phoneNumber       String?            @map("phone_number")
+  isActive          Boolean            @default(true) @map("is_active")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  assignedTasks     Task[]             @relation("AssignedTo")
+  createdTasks      Task[]             @relation("CreatedBy")
+  pushSubscriptions PushSubscription[]
+  auditLogs         AuditLog[]
+
+  @@index([role, isActive])
+  @@index([email])
+  @@map("users")
+}
+
+model Task {
+  id           String        @id @default(cuid())
+  title        String
+  description  String?       @db.Text
+  status       TaskStatus    @default(TO_DO)
+  priority     TaskPriority  @default(MEDIUM)
+  dueDate      DateTime?     @map("due_date")
+  completedAt  DateTime?     @map("completed_at")
+
+  assignedToId String        @map("assigned_to_id")
+  assignedTo   User          @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: Cascade)
+
+  createdById  String        @map("created_by_id")
+  createdBy    User          @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  @@index([assignedToId, status])
+  @@index([status, priority])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
