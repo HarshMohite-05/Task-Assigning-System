@@ -15,7 +15,11 @@ export async function POST(req: NextRequest) {
     if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
       const user = await prisma.user.findFirst({
         where: {
-          OR: [{ id: userId }, { employeeCode: userId }],
+          OR: [
+            { id: userId },
+            { employeeCode: { equals: userId, mode: 'insensitive' } },
+            { email: { equals: userId, mode: 'insensitive' } },
+          ],
         },
         select: { id: true },
       });

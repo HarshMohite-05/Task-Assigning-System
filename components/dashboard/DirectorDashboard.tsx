@@ -33,7 +33,7 @@ import {
   Trash2,
   Shield,
   RotateCcw,
-  History,
+  RefreshCw,
 } from 'lucide-react';
 import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
 
@@ -57,6 +57,7 @@ export interface TaskItem {
 interface DashboardProps {
   initialTasks: TaskItem[];
   employees: Employee[];
+  directorId?: string;
 }
 
 const STATUS_CONFIG = {
@@ -100,7 +101,7 @@ const TASK_TEMPLATES = [
   },
 ];
 
-export default function DirectorDashboard({ initialTasks, employees }: DashboardProps) {
+export default function DirectorDashboard({ initialTasks, employees, directorId }: DashboardProps) {
   const [employeeList, setEmployeeList] = useState<Employee[]>(employees);
   const [tasks, setTasks] = useState<TaskItem[]>(initialTasks);
   const [searchTerm, setSearchTerm] = useState('');
@@ -112,9 +113,32 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
   const [teamTab, setTeamTab] = useState<'LIST' | 'ADD'>('LIST');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmittingEmployee, setIsSubmittingEmployee] = useState(false);
-  const [isPurging, setIsPurging] = useState(false);
-  const [purgeNotice, setPurgeNotice] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'WORKLOAD' | 'STATUS'>('WORKLOAD');
+
+  // Multi-Device Sync: Fetch fresh tasks from database
+  const fetchLiveTasks = async (silent = false) => {
+    if (!silent) setIsRefreshing(true);
+    try {
+      const res = await fetch('/api/tasks');
+      const data = await res.json();
+      if (data?.tasks) {
+        setTasks(data.tasks);
+      }
+    } catch (e) {
+      if (!silent) console.error('Failed to sync tasks:', e);
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  };
+
+  // Periodic automatic sync every 12 seconds so 2 devices stay updated
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      fetchLiveTasks(true);
+    }, 12000);
+    return () => clearInterval(interval);
+  }, []);
 
   // New Employee Form State
   const [employeeFormData, setEmployeeFormData] = useState({
@@ -273,10 +297,16 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
       const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          createdById: directorId,
+        }),
       });
 
-      if (!res.ok) throw new Error('Failed to create task');
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.error || 'Failed to create task in database');
+      }
       const data = await res.json();
 
       setTasks((prev) => prev.map((t) => (t.id === optimisticTask.id ? data.task : t)));
@@ -288,10 +318,10 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
         priority: 'MEDIUM',
         dueDate: '',
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setTasks((prev) => prev.filter((t) => t.id !== optimisticTask.id));
-      alert('Failed to assign task. Optimistic update rolled back.');
+      alert(`⚠️ Failed to assign task: ${err.message || 'Please check connection'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -350,26 +380,7 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
     }
   };
 
-  // Manual Trigger for 3-Month Automated Retention Purge
-  const handleManualPurge = async () => {
-    setIsPurging(true);
-    setPurgeNotice(null);
-    try {
-      const res = await fetch('/api/tasks/cleanup', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        setPurgeNotice(`Cleaned ${data.purgedTasks || 0} tasks older than 90 days.`);
-        const tasksRes = await fetch('/api/tasks');
-        const tasksData = await tasksRes.json();
-        if (tasksData?.tasks) setTasks(tasksData.tasks);
-      }
-    } catch {
-      setPurgeNotice('Purge check completed.');
-    } finally {
-      setIsPurging(false);
-      setTimeout(() => setPurgeNotice(null), 4000);
-    }
-  };
+
 
   const applyTemplate = (tpl: typeof TASK_TEMPLATES[0]) => {
     const futureDate = new Date();
@@ -441,21 +452,15 @@ export default function DirectorDashboard({ initialTasks, employees }: Dashboard
           </div>
           <h2 className="text-xl font-bold text-slate-800">Operational Workforce Control</h2>
           <div className="flex items-center gap-2 mt-1">
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-medium" title="Tasks older than 90 days are automatically deleted">
-              <History className="w-3 h-3 text-emerald-600" />
-              Auto 3-Month Purge: Active
-            </span>
             <button
-              onClick={handleManualPurge}
-              disabled={isPurging}
-              className="text-[11px] text-slate-500 hover:text-slate-800 underline decoration-slate-300 transition"
-              title="Manually verify and clear tasks older than 90 days"
+              onClick={() => fetchLiveTasks(false)}
+              disabled={isRefreshing}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 text-[11px] font-medium transition cursor-pointer"
+              title="Click to sync latest tasks from all devices"
             >
-              {isPurging ? 'Running purge...' : 'Run Purge Now'}
+              <RefreshCw className={`w-3 h-3 text-blue-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Syncing...' : 'Live Synced (Click to Refresh)'}
             </button>
-            {purgeNotice && (
-              <span className="text-[11px] text-blue-600 font-semibold animate-fade-in">{purgeNotice}</span>
-            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">

@@ -135,48 +135,12 @@ export function saveLocalTasks(tasks: TaskRecord[]) {
   }
 }
 
-/**
- * Self-Automated 3-Month (90-day) Task Retention Purge:
- * Permanently removes any tasks created more than 90 days ago from both
- * Postgres and local storage.
- */
-export async function autoPurgeExpiredTasks(): Promise<number> {
-  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-  let purgedCount = 0;
-
-  if (process.env.POSTGRES_PRISMA_URL || process.env.DATABASE_URL) {
-    try {
-      const res = await prisma.task.deleteMany({
-        where: {
-          createdAt: {
-            lt: ninetyDaysAgo,
-          },
-        },
-      });
-      purgedCount += res.count;
-      if (res.count > 0) {
-        console.log(`[Lifecycle Auto-Purge] Purged ${res.count} task(s) older than 90 days from database.`);
-      }
-    } catch (e) {
-      console.warn('Auto-purge database warning:', e);
-    }
-  }
-
-  // Also purge local tasks
-  try {
-    const tasks = loadLocalTasks();
-    const remainingTasks = tasks.filter((t) => new Date(t.createdAt) >= ninetyDaysAgo);
-    if (remainingTasks.length !== tasks.length) {
-      const localDiff = tasks.length - remainingTasks.length;
-      purgedCount += localDiff;
-      saveLocalTasks(remainingTasks);
-      console.log(`[Lifecycle Auto-Purge] Purged ${localDiff} task(s) older than 90 days from local file.`);
-    }
-  } catch (e) {
-    // ignore
-  }
-
-  return purgedCount;
+export function isDatabaseConfigured(): boolean {
+  return Boolean(
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL
+  );
 }
 
 let hasAttemptedSeed = false;
@@ -403,43 +367,55 @@ export async function deleteEmployee(identifier: string): Promise<boolean> {
   return true;
 }
 
+// 3-Month retention purge is CANCELLED per admin instruction. Tasks are retained permanently.
+export async function autoPurgeExpiredTasks(): Promise<number> {
+  return 0;
+}
+
 export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
-  // Trigger self-automated 3-month task retention purge on task retrieval
-  autoPurgeExpiredTasks().catch(() => null);
-  if (process.env.POSTGRES_PRISMA_URL) {
+  if (isDatabaseConfigured()) {
     try {
+      await ensureDatabaseSeeded();
+      const whereClause: any = {};
+      if (employeeId) {
+        whereClause.OR = [
+          { assignedToId: employeeId },
+          { assignedTo: { employeeCode: employeeId.toUpperCase() } },
+        ];
+      }
+
       const dbTasks = await prisma.task.findMany({
-        where: employeeId ? { assignedToId: employeeId } : {},
+        where: whereClause,
         include: {
           assignedTo: {
             select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
           },
         },
-        orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }],
+        orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
       });
-      if (dbTasks.length > 0) {
-        return dbTasks.map((t) => ({
-          id: t.id,
-          title: t.title,
-          description: t.description || undefined,
-          status: t.status as any,
-          priority: t.priority as any,
-          dueDate: t.dueDate ? t.dueDate.toISOString() : null,
-          assignedToId: t.assignedToId,
-          createdById: t.createdById,
-          createdAt: t.createdAt.toISOString(),
-          assignedTo: {
-            id: t.assignedTo.id,
-            employeeCode: t.assignedTo.employeeCode,
-            fullName: t.assignedTo.fullName,
-            designation: t.assignedTo.designation || 'Staff',
-            role: t.assignedTo.role as any,
-            email: t.assignedTo.email,
-          },
-        }));
-      }
+
+      // Always return database tasks directly (even if empty list)
+      return dbTasks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description || undefined,
+        status: t.status as any,
+        priority: t.priority as any,
+        dueDate: t.dueDate ? t.dueDate.toISOString() : null,
+        assignedToId: t.assignedToId,
+        createdById: t.createdById,
+        createdAt: t.createdAt.toISOString(),
+        assignedTo: {
+          id: t.assignedTo.id,
+          employeeCode: t.assignedTo.employeeCode,
+          fullName: t.assignedTo.fullName,
+          designation: t.assignedTo.designation || 'Staff',
+          role: t.assignedTo.role as any,
+          email: t.assignedTo.email,
+        },
+      }));
     } catch (err) {
-      // Fallback
+      console.error('[Database Error] Failed to retrieve tasks from PostgreSQL:', err);
     }
   }
 
@@ -463,8 +439,76 @@ export async function createTask(data: {
     employees.find((e) => e.id === data.assignedToId || e.employeeCode === data.assignedToId) ||
     employees[0];
 
-  if (process.env.POSTGRES_PRISMA_URL) {
+  if (isDatabaseConfigured()) {
     try {
+      await ensureDatabaseSeeded();
+
+      // 1. Resolve Assignee to a valid PostgreSQL cuid
+      let dbAssignee = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { id: data.assignedToId },
+            { employeeCode: data.assignedToId.toUpperCase() },
+            { email: data.assignedToId.toLowerCase() },
+          ],
+        },
+      });
+
+      // If assignee is not in DB yet (e.g. from initial spreadsheet), provision them
+      if (!dbAssignee && assignee) {
+        const passwordHash = await bcrypt.hash(assignee.password || 'Nirmaan@2026', 10);
+        const nameTokens = assignee.fullName.toLowerCase().split(/\s+/);
+        const username = nameTokens.length > 1 ? `${nameTokens[0]}.${nameTokens[nameTokens.length - 1]}` : nameTokens[0];
+        dbAssignee = await prisma.user.upsert({
+          where: { employeeCode: assignee.employeeCode },
+          update: {},
+          create: {
+            employeeCode: assignee.employeeCode,
+            username: `${username}.${Date.now().toString().slice(-4)}`,
+            email: assignee.email,
+            fullName: assignee.fullName,
+            designation: assignee.designation,
+            role: assignee.role as any,
+            passwordHash,
+            phoneNumber: assignee.phoneNumber || null,
+            isActive: true,
+          },
+        });
+      }
+
+      if (!dbAssignee) {
+        dbAssignee = await prisma.user.findFirst({ where: { isActive: true } });
+      }
+
+      if (!dbAssignee) {
+        throw new Error('No active employee found in database to assign task to.');
+      }
+
+      // 2. Resolve Creator to a valid PostgreSQL cuid
+      let dbCreator = null;
+      if (data.createdById) {
+        dbCreator = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { id: data.createdById },
+              { employeeCode: data.createdById.toUpperCase() },
+              { email: data.createdById.toLowerCase() },
+            ],
+          },
+        });
+      }
+
+      if (!dbCreator) {
+        // Fallback to active director
+        dbCreator = await prisma.user.findFirst({
+          where: { role: 'DIRECTOR', isActive: true },
+        });
+      }
+
+      if (!dbCreator) {
+        dbCreator = dbAssignee;
+      }
+
       const dbTask = await prisma.task.create({
         data: {
           title: data.title,
@@ -472,8 +516,8 @@ export async function createTask(data: {
           priority: data.priority as any,
           status: 'TO_DO',
           dueDate: data.dueDate ? new Date(data.dueDate) : null,
-          assignedToId: assignee.id,
-          createdById: data.createdById || assignee.id,
+          assignedToId: dbAssignee.id,
+          createdById: dbCreator.id,
         },
         include: {
           assignedTo: {
@@ -490,6 +534,7 @@ export async function createTask(data: {
         priority: dbTask.priority as any,
         dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
         assignedToId: dbTask.assignedToId,
+        createdById: dbTask.createdById,
         createdAt: dbTask.createdAt.toISOString(),
         assignedTo: {
           id: dbTask.assignedTo.id,
@@ -501,7 +546,8 @@ export async function createTask(data: {
         },
       };
     } catch (err) {
-      console.warn('Prisma create failed, saving to local store:', err);
+      console.error('[Database Task Creation Error]:', err);
+      throw err;
     }
   }
 
@@ -526,7 +572,7 @@ export async function createTask(data: {
 }
 
 export async function updateTaskStatus(taskId: string, status: string): Promise<TaskRecord | null> {
-  if (process.env.POSTGRES_PRISMA_URL) {
+  if (isDatabaseConfigured()) {
     try {
       const dbTask = await prisma.task.update({
         where: { id: taskId },
@@ -549,6 +595,7 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
         priority: dbTask.priority as any,
         dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
         assignedToId: dbTask.assignedToId,
+        createdById: dbTask.createdById,
         createdAt: dbTask.createdAt.toISOString(),
         assignedTo: {
           id: dbTask.assignedTo.id,
@@ -560,7 +607,7 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
         },
       };
     } catch (err) {
-      // Fallback
+      console.warn('Prisma updateTaskStatus fallback:', err);
     }
   }
 

@@ -46,7 +46,9 @@ export async function sendNativePushNotification(userId: string, payload: PushPa
       where: {
         OR: [
           { userId },
-          { user: { employeeCode: userId } },
+          { user: { id: userId } },
+          { user: { employeeCode: { equals: userId, mode: 'insensitive' } } },
+          { user: { email: { equals: userId, mode: 'insensitive' } } },
         ],
       },
     });

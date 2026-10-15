@@ -1,13 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
 import PushNotificationPrompt from '@/components/push/PushNotificationPrompt';
 
 import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
 
 interface Task {
-
   id: string;
   title: string;
   description?: string;
@@ -38,6 +37,31 @@ export default function EmployeeView({
 }: EmployeeViewProps) {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Live Multi-Device Sync: Fetch freshly assigned tasks
+  const fetchLiveTasks = async (silent = false) => {
+    if (!silent) setIsRefreshing(true);
+    try {
+      const res = await fetch(`/api/tasks?employeeId=${encodeURIComponent(employeeId)}`);
+      const data = await res.json();
+      if (data?.tasks) {
+        setTasks(data.tasks);
+      }
+    } catch (e) {
+      if (!silent) console.error('Failed to sync employee tasks:', e);
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  };
+
+  // Automatically poll every 12 seconds so new assignments appear without page reload
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchLiveTasks(true);
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [employeeId]);
 
   const updateStatus = async (taskId: string, newStatus: Task['status']) => {
     setUpdatingTaskId(taskId);
@@ -77,9 +101,20 @@ export default function EmployeeView({
 
       {/* Task Stream Feed */}
       <div className="space-y-3">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 px-1">
-          Your Delegated Tasks ({tasks.length})
-        </h3>
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            Your Delegated Tasks ({tasks.length})
+          </h3>
+          <button
+            onClick={() => fetchLiveTasks(false)}
+            disabled={isRefreshing}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-medium transition cursor-pointer"
+            title="Click to check for new tasks"
+          >
+            <RefreshCw className={`w-3 h-3 text-emerald-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Checking...' : 'Live Synced (Click to Refresh)'}
+          </button>
+        </div>
 
         {tasks.length === 0 ? (
           <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center space-y-2">

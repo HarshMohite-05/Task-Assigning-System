@@ -67,6 +67,7 @@ export default async function DirectorPage() {
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 lg:px-8 pt-6">
         <DirectorDashboard
+          directorId={user.id || user.employeeCode}
           initialTasks={tasks.map((t) => ({
             ...t,
             dueDate: t.dueDate ? new Date(t.dueDate).toISOString() : null,
