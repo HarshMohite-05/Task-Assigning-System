@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { updateTaskStatus } from '@/lib/data-store';
+import { deleteTask, updateTaskStatus } from '@/lib/data-store';
 import { notifyDirectors } from '@/lib/push-service';
 
 export async function PATCH(
@@ -42,5 +42,21 @@ export async function PATCH(
   } catch (error: any) {
     console.error('Task status update error:', error);
     return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { taskId: string } }
+) {
+  try {
+    const deleted = await deleteTask(params.taskId);
+    if (!deleted) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Task deletion error:', error);
+    return NextResponse.json({ error: 'Failed to delete task' }, { status: 500 });
   }
 }

@@ -712,6 +712,20 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
   return null;
 }
 
+export async function deleteTask(taskId: string): Promise<boolean> {
+  if (isDatabaseConfigured()) {
+    const result = await prisma.task.deleteMany({ where: { id: taskId } });
+    return result.count > 0;
+  }
+
+  assertLocalStoreIsSafe();
+  const tasks = loadLocalTasks();
+  const remaining = tasks.filter((t) => t.id !== taskId);
+  if (remaining.length === tasks.length) return false;
+  saveLocalTasks(remaining);
+  return true;
+}
+
 export async function authenticateUser(identifier: string, rawPassword: string): Promise<EmployeeRecord | null> {
   const cleanId = identifier.trim().toLowerCase();
   const cleanPass = rawPassword.trim();

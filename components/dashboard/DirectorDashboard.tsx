@@ -372,6 +372,22 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
     }
   };
 
+  // Delete Task Handler
+  const handleDeleteTask = async (taskId: string, title: string) => {
+    if (!confirm(`Delete task "${title}"? This cannot be undone.`)) return;
+
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 404) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete task');
+      }
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    } catch (err: any) {
+      alert(`⚠️ ${err.message || 'Error deleting task'}`);
+    }
+  };
+
   // Delete Employee Handler
   const handleDeleteEmployee = async (empId: string, empName: string) => {
     if (!confirm(`Are you sure you want to remove ${empName}? This will also delete their assigned tasks.`)) {
@@ -789,6 +805,14 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       <option value="COMPLETED">Completed</option>
                     </select>
 
+                    <button
+                      onClick={() => handleDeleteTask(task.id, task.title)}
+                      title="Delete task"
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+
                     <div className="text-right">
                       <div className="text-xs font-bold text-slate-800">
                         {task.assignedTo?.fullName || 'Assigned Staff'}
@@ -875,6 +899,13 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                               <option value="BLOCKED">Blocked</option>
                               <option value="COMPLETED">Completed</option>
                             </select>
+                            <button
+                              onClick={() => handleDeleteTask(t.id, t.title)}
+                              title="Delete task"
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       ))
