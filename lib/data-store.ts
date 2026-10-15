@@ -183,6 +183,16 @@ export function saveLocalTasks(tasks: TaskRecord[]) {
   }
 }
 
+// On serverless hosts the filesystem is per-instance and ephemeral, so the JSON
+// fallback silently loses tasks. Refuse to use it there rather than pretend to save.
+function assertLocalStoreIsSafe() {
+  if (process.env.VERCEL) {
+    throw new Error(
+      'No database configured. Add a Postgres database (DATABASE_URL / POSTGRES_PRISMA_URL) to the Vercel project; tasks cannot be stored without it.'
+    );
+  }
+}
+
 export function isDatabaseConfigured(): boolean {
   return Boolean(
     process.env.DATABASE_URL ||
@@ -464,8 +474,10 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
       }));
     } catch (err) {
       console.error('[Database Error] Failed to retrieve tasks from PostgreSQL:', err);
+      throw new Error('Database unavailable: could not load tasks. Check DATABASE_URL and that the schema is pushed.');
     }
   }
+  assertLocalStoreIsSafe();
 
   const tasks = loadLocalTasks();
   if (employeeId) {
@@ -489,9 +501,12 @@ export async function createTask(data: {
   createdById?: string;
 }): Promise<TaskRecord> {
   const employees = await getEmployees();
-  const assignee =
-    employees.find((e) => e.id === data.assignedToId || e.employeeCode === data.assignedToId) ||
-    employees[0];
+  const assignee = employees.find(
+    (e) => e.id === data.assignedToId || e.employeeCode === data.assignedToId
+  );
+  if (!assignee) {
+    throw new Error(`Assignee "${data.assignedToId}" not found.`);
+  }
 
   if (isDatabaseConfigured()) {
     try {
@@ -608,10 +623,11 @@ export async function createTask(data: {
         },
       };
     } catch (err) {
-      console.warn('[Database Task Creation Notice] Prisma write unavailable, saving to persistent store:', err);
-      // Fall through to resilient persistent store so task is NEVER dropped!
+      console.error('[Database Task Creation Error]', err);
+      throw new Error('Could not save task to the database. Check DATABASE_URL and that the schema is pushed.');
     }
   }
+  assertLocalStoreIsSafe();
 
   // Resilient persistent store execution
   let localDueDate: string | null = null;
