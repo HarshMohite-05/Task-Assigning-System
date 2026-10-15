@@ -280,13 +280,21 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       designation: 'Specialist',
     };
 
+    let formattedDueDate: string | null = null;
+    if (formData.dueDate && typeof formData.dueDate === 'string' && formData.dueDate.trim() !== '') {
+      const d = new Date(formData.dueDate);
+      if (!isNaN(d.getTime())) {
+        formattedDueDate = d.toISOString();
+      }
+    }
+
     const optimisticTask: TaskItem = {
       id: `temp-${Date.now()}`,
-      title: formData.title,
-      description: formData.description,
+      title: formData.title.trim(),
+      description: formData.description?.trim() || undefined,
       priority: formData.priority as any,
       status: 'TO_DO',
-      dueDate: formData.dueDate ? new Date(formData.dueDate).toISOString() : null,
+      dueDate: formattedDueDate,
       assignedTo: assignedEmployee,
     };
 
@@ -298,16 +306,20 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...formData,
+          title: formData.title.trim(),
+          description: formData.description?.trim() || undefined,
+          priority: formData.priority,
+          dueDate: formattedDueDate,
+          assignedToId: formData.assignedToId,
           createdById: directorId,
         }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null);
-        throw new Error(errorData?.error || 'Failed to create task in database');
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.task) {
+        throw new Error(data?.error || 'Failed to save task');
       }
-      const data = await res.json();
 
       setTasks((prev) => prev.map((t) => (t.id === optimisticTask.id ? data.task : t)));
 
@@ -319,9 +331,9 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         dueDate: '',
       });
     } catch (err: any) {
-      console.error(err);
+      console.error('Task assignment notice:', err);
       setTasks((prev) => prev.filter((t) => t.id !== optimisticTask.id));
-      alert(`⚠️ Failed to assign task: ${err.message || 'Please check connection'}`);
+      alert(`⚠️ Notice: ${err.message || 'Please check server connection'}`);
     } finally {
       setIsSubmitting(false);
     }

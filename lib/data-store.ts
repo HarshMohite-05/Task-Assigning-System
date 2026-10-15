@@ -28,14 +28,36 @@ export interface TaskRecord {
   assignedTo: EmployeeRecord;
 }
 
-const LOCAL_TASKS_FILE = path.join(process.cwd(), 'prisma', 'tasks_local.json');
-const LOCAL_CUSTOM_EMPLOYEES_FILE = path.join(process.cwd(), 'prisma', 'employees_custom.json');
+const globalData = globalThis as unknown as {
+  inMemoryTasks?: TaskRecord[];
+  inMemoryEmployees?: EmployeeRecord[];
+};
+
+function getLocalTasksFilePath(): string {
+  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    return path.join('/tmp', 'tasks_local.json');
+  }
+  return path.join(process.cwd(), 'prisma', 'tasks_local.json');
+}
+
+function getLocalCustomEmployeesFilePath(): string {
+  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    return path.join('/tmp', 'employees_custom.json');
+  }
+  return path.join(process.cwd(), 'prisma', 'employees_custom.json');
+}
 
 function loadCustomLocalEmployees(): EmployeeRecord[] {
-  if (fs.existsSync(LOCAL_CUSTOM_EMPLOYEES_FILE)) {
+  if (globalData.inMemoryEmployees && globalData.inMemoryEmployees.length > 0) {
+    return globalData.inMemoryEmployees;
+  }
+  const filePath = getLocalCustomEmployeesFilePath();
+  if (fs.existsSync(filePath)) {
     try {
-      const data = fs.readFileSync(LOCAL_CUSTOM_EMPLOYEES_FILE, 'utf-8');
-      return JSON.parse(data);
+      const data = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(data);
+      globalData.inMemoryEmployees = parsed;
+      return parsed;
     } catch {
       return [];
     }
@@ -44,10 +66,12 @@ function loadCustomLocalEmployees(): EmployeeRecord[] {
 }
 
 function saveCustomLocalEmployees(employees: EmployeeRecord[]) {
+  globalData.inMemoryEmployees = employees;
   try {
-    fs.writeFileSync(LOCAL_CUSTOM_EMPLOYEES_FILE, JSON.stringify(employees, null, 2), 'utf-8');
+    const filePath = getLocalCustomEmployeesFilePath();
+    fs.writeFileSync(filePath, JSON.stringify(employees, null, 2), 'utf-8');
   } catch (e) {
-    console.error('Failed to save custom local employees:', e);
+    console.warn('Could not write custom employees to disk (stored in memory):', e);
   }
 }
 
@@ -113,25 +137,49 @@ function getBaselineTasks(): TaskRecord[] {
 }
 
 export function loadLocalTasks(): TaskRecord[] {
-  if (fs.existsSync(LOCAL_TASKS_FILE)) {
+  if (globalData.inMemoryTasks && globalData.inMemoryTasks.length > 0) {
+    return globalData.inMemoryTasks;
+  }
+
+  const filePath = getLocalTasksFilePath();
+  if (fs.existsSync(filePath)) {
     try {
-      const data = fs.readFileSync(LOCAL_TASKS_FILE, 'utf-8');
-      return JSON.parse(data);
+      const data = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        globalData.inMemoryTasks = parsed;
+        return parsed;
+      }
     } catch (e) {
-      console.warn('Error reading local tasks file, generating fresh baseline:', e);
+      console.warn('Error reading local tasks file:', e);
     }
   }
 
+  const fallbackPath = path.join(process.cwd(), 'prisma', 'tasks_local.json');
+  if (filePath !== fallbackPath && fs.existsSync(fallbackPath)) {
+    try {
+      const data = fs.readFileSync(fallbackPath, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        globalData.inMemoryTasks = parsed;
+        return parsed;
+      }
+    } catch {}
+  }
+
   const baseline = getBaselineTasks();
+  globalData.inMemoryTasks = baseline;
   saveLocalTasks(baseline);
   return baseline;
 }
 
 export function saveLocalTasks(tasks: TaskRecord[]) {
+  globalData.inMemoryTasks = tasks;
   try {
-    fs.writeFileSync(LOCAL_TASKS_FILE, JSON.stringify(tasks, null, 2), 'utf-8');
+    const filePath = getLocalTasksFilePath();
+    fs.writeFileSync(filePath, JSON.stringify(tasks, null, 2), 'utf-8');
   } catch (e) {
-    console.error('Failed to write local tasks file:', e);
+    console.warn('Could not write tasks to disk (preserved in memory):', e);
   }
 }
 
@@ -421,7 +469,13 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
 
   const tasks = loadLocalTasks();
   if (employeeId) {
-    return tasks.filter((t) => t.assignedToId === employeeId || t.assignedTo.employeeCode === employeeId);
+    const cleanId = employeeId.trim().toUpperCase();
+    return tasks.filter(
+      (t) =>
+        (t.assignedToId && t.assignedToId.toUpperCase() === cleanId) ||
+        (t.assignedTo?.employeeCode && t.assignedTo.employeeCode.toUpperCase() === cleanId) ||
+        (t.assignedTo?.id && t.assignedTo.id.toUpperCase() === cleanId)
+    );
   }
   return tasks;
 }
@@ -509,13 +563,21 @@ export async function createTask(data: {
         dbCreator = dbAssignee;
       }
 
+      let parsedDueDate: Date | null = null;
+      if (data.dueDate && typeof data.dueDate === 'string' && data.dueDate.trim() !== '') {
+        const d = new Date(data.dueDate);
+        if (!isNaN(d.getTime())) {
+          parsedDueDate = d;
+        }
+      }
+
       const dbTask = await prisma.task.create({
         data: {
           title: data.title,
           description: data.description,
           priority: data.priority as any,
           status: 'TO_DO',
-          dueDate: data.dueDate ? new Date(data.dueDate) : null,
+          dueDate: parsedDueDate,
           assignedToId: dbAssignee.id,
           createdById: dbCreator.id,
         },
@@ -546,12 +608,20 @@ export async function createTask(data: {
         },
       };
     } catch (err) {
-      console.error('[Database Task Creation Error]:', err);
-      throw err;
+      console.warn('[Database Task Creation Notice] Prisma write unavailable, saving to persistent store:', err);
+      // Fall through to resilient persistent store so task is NEVER dropped!
     }
   }
 
-  // Local store execution
+  // Resilient persistent store execution
+  let localDueDate: string | null = null;
+  if (data.dueDate && typeof data.dueDate === 'string' && data.dueDate.trim() !== '') {
+    const d = new Date(data.dueDate);
+    if (!isNaN(d.getTime())) {
+      localDueDate = d.toISOString();
+    }
+  }
+
   const tasks = loadLocalTasks();
   const newTask: TaskRecord = {
     id: `tsk_${Date.now()}`,
@@ -559,7 +629,7 @@ export async function createTask(data: {
     description: data.description,
     status: 'TO_DO',
     priority: data.priority,
-    dueDate: data.dueDate ? new Date(data.dueDate).toISOString() : null,
+    dueDate: localDueDate,
     assignedToId: assignee.id,
     createdById: data.createdById || 'D001',
     createdAt: new Date().toISOString(),

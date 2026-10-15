@@ -32,15 +32,21 @@ export default async function EmployeePage() {
   ]);
 
   const currentEmp =
-    allEmployees.find((e) => e.employeeCode === user.employeeCode) || user;
+    allEmployees.find((e) => e.employeeCode.toUpperCase() === user.employeeCode.toUpperCase()) || user;
 
-  // Filter tasks belonging to this specific employee
-  const tasks = allTasks.filter(
-    (t) =>
-      t.assignedToId === currentEmp.id ||
-      t.assignedToId === currentEmp.employeeCode ||
-      t.assignedTo?.employeeCode === currentEmp.employeeCode
-  );
+  const empCode = (currentEmp.employeeCode || user.employeeCode || '').toUpperCase();
+  const empId = (currentEmp.id || user.id || '').toUpperCase();
+
+  // Filter tasks belonging to this specific employee (case-insensitive dual match)
+  const tasks = allTasks.filter((t) => {
+    const assignedId = (t.assignedToId || '').toUpperCase();
+    const assignedCode = (t.assignedTo?.employeeCode || '').toUpperCase();
+    const assignedEmpId = (t.assignedTo?.id || '').toUpperCase();
+    return (
+      (empCode && (assignedId === empCode || assignedCode === empCode)) ||
+      (empId && (assignedId === empId || assignedEmpId === empId))
+    );
+  });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-16">

@@ -6,7 +6,7 @@ import { sendNativePushNotification } from '@/lib/push-service';
 export const dynamic = 'force-dynamic';
 
 const createTaskSchema = z.object({
-  title: z.string().min(3, 'Title must be at least 3 characters'),
+  title: z.string().min(1, 'Title is required'),
   description: z.string().optional(),
   assignedToId: z.string().min(1, 'Assignee is required'),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const validated = createTaskSchema.parse(body);
 
-    // Save task through universal data store (Prisma Postgres / local persistent fallback)
+    // Save task through universal data store (Prisma Postgres / persistent fallback)
     const newTask = await createTask({
       title: validated.title,
       description: validated.description,
@@ -38,9 +38,10 @@ export async function POST(req: NextRequest) {
     };
 
     // Non-blocking async dispatch
-    sendNativePushNotification(newTask.assignedToId, pushPayload).catch((err) => {
-      console.warn('[API] Push dispatch background notice:', err);
-    });
+    sendNativePushNotification(newTask.assignedToId, pushPayload).catch(() => null);
+    if (newTask.assignedTo?.employeeCode && newTask.assignedTo.employeeCode !== newTask.assignedToId) {
+      sendNativePushNotification(newTask.assignedTo.employeeCode, pushPayload).catch(() => null);
+    }
 
     return NextResponse.json({ success: true, task: newTask }, { status: 201 });
   } catch (error: any) {
