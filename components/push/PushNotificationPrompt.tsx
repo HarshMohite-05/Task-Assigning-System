@@ -66,13 +66,12 @@ export default function PushNotificationPrompt({ userId }: PushPromptProps) {
       }
 
       const reg = await navigator.serviceWorker.ready;
-      const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-
-      if (!vapidPublicKey || vapidPublicKey.includes('replace_with') || vapidPublicKey.includes('...')) {
-        console.error('Missing or invalid NEXT_PUBLIC_VAPID_PUBLIC_KEY');
-        alert('Push notification service is not configured with valid production VAPID keys.');
+      const keyRes = await fetch('/api/push/key', { cache: 'no-store' });
+      if (!keyRes.ok) {
+        alert('Push notification service is not configured on the server (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY missing in Vercel Production).');
         return;
       }
+      const vapidPublicKey: string = (await keyRes.json()).key;
 
       const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
 
