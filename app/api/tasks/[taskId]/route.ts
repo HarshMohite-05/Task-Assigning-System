@@ -21,22 +21,24 @@ export async function PATCH(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Notify directors on critical lifecycle events (COMPLETED or BLOCKED)
-    if (status === 'COMPLETED' || status === 'BLOCKED') {
-      const isCompleted = status === 'COMPLETED';
-      const icon = isCompleted ? '✅' : '⚠️';
-      const actionText = isCompleted ? 'completed' : 'reported blocked on';
-      const assigneeName = updatedTask.assignedTo?.fullName || 'An employee';
+    // Notify directors on every status change (awaited so serverless doesn't drop it)
+    const labels: Record<string, [string, string]> = {
+      TO_DO: ['↩️', 'moved back to To Do'],
+      IN_PROGRESS: ['🚀', 'started'],
+      BLOCKED: ['⚠️', 'reported blocked on'],
+      COMPLETED: ['✅', 'completed'],
+    };
+    const [icon, actionText] = labels[status];
+    const assigneeName = updatedTask.assignedTo?.fullName || 'An employee';
 
-      notifyDirectors({
-        title: `${icon} Task ${status === 'COMPLETED' ? 'Completed' : 'Blocked'}`,
-        body: `${assigneeName} ${actionText}: "${updatedTask.title}"`,
-        url: `/director?taskId=${updatedTask.id}`,
-        taskId: updatedTask.id,
-      }, updatedTask.createdById).catch((err) => {
-        console.warn('[API] Director notification notice:', err);
-      });
-    }
+    await notifyDirectors({
+      title: `${icon} Task ${status === 'COMPLETED' ? 'Completed' : status === 'BLOCKED' ? 'Blocked' : 'Updated'}`,
+      body: `${assigneeName} ${actionText}: "${updatedTask.title}"`,
+      url: `/director?taskId=${updatedTask.id}`,
+      taskId: updatedTask.id,
+    }, updatedTask.createdById).catch((err) => {
+      console.warn('[API] Director notification notice:', err);
+    });
 
     return NextResponse.json({ success: true, task: updatedTask });
   } catch (error: any) {

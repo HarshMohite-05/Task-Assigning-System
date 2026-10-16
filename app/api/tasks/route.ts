@@ -4,6 +4,7 @@ import { createTask, getTasks } from '@/lib/data-store';
 import { sendNativePushNotification } from '@/lib/push-service';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
 
 const createTaskSchema = z.object({
   title: z.string().min(1, 'Title is required'),
@@ -37,11 +38,9 @@ export async function POST(req: NextRequest) {
       taskId: newTask.id,
     };
 
-    // Non-blocking async dispatch
-    sendNativePushNotification(newTask.assignedToId, pushPayload).catch(() => null);
-    if (newTask.assignedTo?.employeeCode && newTask.assignedTo.employeeCode !== newTask.assignedToId) {
-      sendNativePushNotification(newTask.assignedTo.employeeCode, pushPayload).catch(() => null);
-    }
+    // Must be awaited: serverless runtimes freeze after the response is sent,
+    // which silently drops any push still in flight.
+    await sendNativePushNotification(newTask.assignedToId, pushPayload).catch(() => null);
 
     return NextResponse.json({ success: true, task: newTask }, { status: 201 });
   } catch (error: any) {

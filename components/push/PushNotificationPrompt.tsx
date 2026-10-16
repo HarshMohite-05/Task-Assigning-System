@@ -30,11 +30,24 @@ export default function PushNotificationPrompt({ userId }: PushPromptProps) {
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setPermission(Notification.permission);
-      if (Notification.permission === 'granted') {
-        setIsSubscribed(true);
+      // Permission alone isn't enough: verify a real push subscription exists
+      // and re-sync it to the server (covers re-login, other user, or DB resets).
+      if (Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.ready
+          .then((reg) => reg.pushManager.getSubscription())
+          .then(async (sub) => {
+            if (!sub) return;
+            const res = await fetch('/api/push/subscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, subscription: sub.toJSON(), userAgent: navigator.userAgent }),
+            });
+            if (res.ok) setIsSubscribed(true);
+          })
+          .catch(() => null);
       }
     }
-  }, []);
+  }, [userId]);
 
   const subscribeToPush = async () => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
