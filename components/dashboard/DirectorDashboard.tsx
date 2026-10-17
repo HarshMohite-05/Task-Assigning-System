@@ -34,6 +34,7 @@ import {
   Shield,
   RotateCcw,
   RefreshCw,
+  Bell,
 } from 'lucide-react';
 import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
 
@@ -369,6 +370,20 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       alert(`⚠️ ${err.message || 'Error creating employee'}`);
     } finally {
       setIsSubmittingEmployee(false);
+    }
+  };
+
+  // Send Reminder Handler
+  const handleRemindTask = async (taskId: string, assigneeName?: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/remind`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to send reminder');
+      }
+      alert(`🔔 Reminder sent to ${assigneeName || 'employee'}`);
+    } catch (err: any) {
+      alert(`⚠️ ${err.message || 'Error sending reminder'}`);
     }
   };
 
@@ -806,6 +821,14 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                     </select>
 
                     <button
+                      onClick={() => handleRemindTask(task.id, task.assignedTo?.fullName)}
+                      title="Send reminder"
+                      className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition"
+                    >
+                      <Bell className="w-4 h-4" />
+                    </button>
+
+                    <button
                       onClick={() => handleDeleteTask(task.id, task.title)}
                       title="Delete task"
                       className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
@@ -899,6 +922,13 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                               <option value="BLOCKED">Blocked</option>
                               <option value="COMPLETED">Completed</option>
                             </select>
+                            <button
+                              onClick={() => handleRemindTask(t.id, t.assignedTo?.fullName)}
+                              title="Send reminder"
+                              className="p-1 text-slate-400 hover:text-amber-600 rounded transition"
+                            >
+                              <Bell className="w-3.5 h-3.5" />
+                            </button>
                             <button
                               onClick={() => handleDeleteTask(t.id, t.title)}
                               title="Delete task"
