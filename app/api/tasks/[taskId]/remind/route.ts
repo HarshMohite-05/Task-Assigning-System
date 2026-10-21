@@ -19,7 +19,7 @@ export async function POST(
     // Awaited so serverless doesn't drop the push after the response is sent
     await sendNativePushNotification(task.assignedToId, {
       title: '⏰ Task Reminder',
-      body: `[${task.priority}] ${task.title}`,
+      body: `[${task.priority}] ${task.title}${task.createdByName ? ` — assigned by ${task.createdByName}` : ''}`,
       url: `/employee?taskId=${task.id}`,
       taskId: task.id,
     }).catch(() => null);

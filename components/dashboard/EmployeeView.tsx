@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw } from 'lucide-react';
+import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw, UserCheck } from 'lucide-react';
 import PushNotificationPrompt from '@/components/push/PushNotificationPrompt';
 
 import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
@@ -13,6 +13,7 @@ interface Task {
   status: 'TO_DO' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
+  createdByName?: string;
 }
 
 interface EmployeeViewProps {
@@ -171,6 +172,13 @@ export default function EmployeeView({
               >
                 {task.title}
               </h4>
+
+              {task.createdByName && (
+                <p className="flex items-center gap-1 text-[11px] text-slate-500 mt-0.5">
+                  <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+                  Assigned by <span className="font-semibold text-slate-700">{task.createdByName}</span>
+                </p>
+              )}
 
               {task.description && (
                 <p className="text-xs text-slate-600 mt-1 mb-4 leading-relaxed bg-slate-50 p-2.5 rounded-xl border border-slate-100">

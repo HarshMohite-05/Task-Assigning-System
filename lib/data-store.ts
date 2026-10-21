@@ -24,6 +24,7 @@ export interface TaskRecord {
   dueDate?: string | null;
   assignedToId: string;
   createdById?: string;
+  createdByName?: string;
   createdAt: string;
   assignedTo: EmployeeRecord;
 }
@@ -453,6 +454,7 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
           assignedTo: {
             select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
           },
+          createdBy: { select: { fullName: true } },
         },
         orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
       });
@@ -467,6 +469,7 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
         dueDate: t.dueDate ? t.dueDate.toISOString() : null,
         assignedToId: t.assignedToId,
         createdById: t.createdById,
+        createdByName: t.createdBy?.fullName,
         createdAt: t.createdAt.toISOString(),
         assignedTo: {
           id: t.assignedTo.id,
@@ -484,7 +487,14 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
   }
   assertLocalStoreIsSafe();
 
-  const tasks = loadLocalTasks().map((t) => ({ ...t, assignedTo: stripPassword(t.assignedTo) }));
+  const employees = await getEmployees();
+  const tasks = loadLocalTasks().map((t) => ({
+    ...t,
+    createdByName:
+      t.createdByName ||
+      employees.find((e) => e.id === t.createdById || e.employeeCode === t.createdById)?.fullName,
+    assignedTo: stripPassword(t.assignedTo),
+  }));
   if (employeeId) {
     const cleanId = employeeId.trim().toUpperCase();
     return tasks.filter(
@@ -605,6 +615,7 @@ export async function createTask(data: {
           assignedTo: {
             select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
           },
+          createdBy: { select: { fullName: true } },
         },
       });
 
@@ -617,6 +628,7 @@ export async function createTask(data: {
         dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
         assignedToId: dbTask.assignedToId,
         createdById: dbTask.createdById,
+        createdByName: dbTask.createdBy?.fullName,
         createdAt: dbTask.createdAt.toISOString(),
         assignedTo: {
           id: dbTask.assignedTo.id,
@@ -653,6 +665,9 @@ export async function createTask(data: {
     dueDate: localDueDate,
     assignedToId: assignee.id,
     createdById: data.createdById || 'D001',
+    createdByName: employees.find(
+      (e) => e.id === (data.createdById || 'D001') || e.employeeCode === (data.createdById || 'D001')
+    )?.fullName,
     createdAt: new Date().toISOString(),
     assignedTo: stripPassword(assignee),
   };
@@ -675,6 +690,7 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
           assignedTo: {
             select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
           },
+          createdBy: { select: { fullName: true } },
         },
       });
 
@@ -687,6 +703,7 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
         dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
         assignedToId: dbTask.assignedToId,
         createdById: dbTask.createdById,
+        createdByName: dbTask.createdBy?.fullName,
         createdAt: dbTask.createdAt.toISOString(),
         assignedTo: {
           id: dbTask.assignedTo.id,

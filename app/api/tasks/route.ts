@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     // Native mobile push notification dispatch (asynchronous, non-blocking)
     const pushPayload = {
       title: '🚨 New Task Delegated',
-      body: `[${newTask.priority}] ${newTask.title}`,
+      body: `[${newTask.priority}] ${newTask.title}${newTask.createdByName ? ` — assigned by ${newTask.createdByName}` : ''}`,
       url: `/employee?taskId=${newTask.id}`,
       taskId: newTask.id,
     };

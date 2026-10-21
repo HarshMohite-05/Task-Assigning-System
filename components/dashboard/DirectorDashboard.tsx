@@ -52,6 +52,7 @@ export interface TaskItem {
   status: 'TO_DO' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
+  createdByName?: string;
   assignedTo: Employee;
 }
 
@@ -843,6 +844,9 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       <div className="text-[10px] text-slate-400 font-mono">
                         {task.assignedTo?.employeeCode || 'STAFF'} • {task.assignedTo?.designation || 'Staff'}
                       </div>
+                      {task.createdByName && (
+                        <div className="text-[10px] text-slate-500">Assigned by {task.createdByName}</div>
+                      )}
                     </div>
 
                     <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 font-bold flex items-center justify-center text-xs shrink-0">
