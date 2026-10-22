@@ -1,10 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw, UserCheck } from 'lucide-react';
+import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw, UserCheck, Repeat, Sun } from 'lucide-react';
 import PushNotificationPrompt from '@/components/push/PushNotificationPrompt';
+import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
+import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
-import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
+import { formatDate, formatRelativeDueDate, formatReminderInterval } from '@/lib/format-utils';
 
 interface Task {
   id: string;
@@ -13,7 +15,11 @@ interface Task {
   status: 'TO_DO' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
+  completedAt?: string | null;
+  assignedToId?: string;
   createdByName?: string;
+  reminderIntervalMinutes?: number | null;
+  attachments?: TaskAttachment[];
 }
 
 interface EmployeeViewProps {
@@ -39,6 +45,12 @@ export default function EmployeeView({
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+
+  // Tapping the daily summary push opens /employee?summary=1
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('summary') === '1') setIsSummaryOpen(true);
+  }, []);
 
   // Live Multi-Device Sync: Fetch freshly assigned tasks
   const fetchLiveTasks = async (silent = false) => {
@@ -97,8 +109,25 @@ export default function EmployeeView({
           </div>
           <h2 className="text-xl font-bold text-slate-800">{employeeName}</h2>
         </div>
-        <PushNotificationPrompt userId={employeeId} />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setIsSummaryOpen(true)}
+            className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-2 rounded-xl text-xs font-semibold border border-amber-200 transition"
+          >
+            <Sun className="w-4 h-4 text-amber-500" />
+            Morning Summary
+          </button>
+          <PushNotificationPrompt userId={employeeId} />
+        </div>
       </div>
+
+      <MorningSummaryModal
+        isOpen={isSummaryOpen}
+        onClose={() => setIsSummaryOpen(false)}
+        role="EMPLOYEE"
+        userId={employeeId}
+        tasks={tasks.map((t) => ({ ...t, assignedToId: t.assignedToId || employeeId }))}
+      />
 
       {/* Task Stream Feed */}
       <div className="space-y-3">
@@ -180,11 +209,22 @@ export default function EmployeeView({
                 </p>
               )}
 
+              {task.reminderIntervalMinutes && task.status !== 'COMPLETED' && (
+                <p className="flex items-center gap-1 text-[11px] text-amber-700 mt-0.5">
+                  <Repeat className="w-3.5 h-3.5" />
+                  Reminder repeats {formatReminderInterval(task.reminderIntervalMinutes)} until marked Done
+                </p>
+              )}
+
               {task.description && (
                 <p className="text-xs text-slate-600 mt-1 mb-4 leading-relaxed bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                   {task.description}
                 </p>
               )}
+
+              <div className="mb-3">
+                <TaskAttachments taskId={task.id} attachments={task.attachments} />
+              </div>
 
               {/* Status Action Buttons (One-tap interaction) */}
               <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2">

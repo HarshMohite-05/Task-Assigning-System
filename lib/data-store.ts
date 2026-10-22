@@ -27,6 +27,64 @@ export interface TaskRecord {
   createdByName?: string;
   createdAt: string;
   assignedTo: EmployeeRecord;
+  completedAt?: string | null;
+  reminderIntervalMinutes?: number | null;
+  nextReminderAt?: string | null;
+  attachments?: AttachmentMeta[];
+}
+
+export interface AttachmentMeta {
+  id: string;
+  kind: 'FILE' | 'VOICE';
+  fileName: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+const taskInclude = {
+  assignedTo: {
+    select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
+  },
+  createdBy: { select: { fullName: true } },
+  attachments: {
+    select: { id: true, kind: true, fileName: true, mimeType: true, size: true, createdAt: true },
+    orderBy: { createdAt: 'asc' as const },
+  },
+};
+
+function toTaskRecord(t: any): TaskRecord {
+  return {
+    id: t.id,
+    title: t.title,
+    description: t.description || undefined,
+    status: t.status as any,
+    priority: t.priority as any,
+    dueDate: t.dueDate ? t.dueDate.toISOString() : null,
+    assignedToId: t.assignedToId,
+    createdById: t.createdById,
+    createdByName: t.createdBy?.fullName,
+    createdAt: t.createdAt.toISOString(),
+    completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    reminderIntervalMinutes: t.reminderIntervalMinutes ?? null,
+    nextReminderAt: t.nextReminderAt ? t.nextReminderAt.toISOString() : null,
+    attachments: (t.attachments || []).map((a: any) => ({
+      id: a.id,
+      kind: a.kind,
+      fileName: a.fileName,
+      mimeType: a.mimeType,
+      size: a.size,
+      createdAt: a.createdAt.toISOString(),
+    })),
+    assignedTo: {
+      id: t.assignedTo.id,
+      employeeCode: t.assignedTo.employeeCode,
+      fullName: t.assignedTo.fullName,
+      designation: t.assignedTo.designation || 'Staff',
+      role: t.assignedTo.role as any,
+      email: t.assignedTo.email,
+    },
+  };
 }
 
 const globalData = globalThis as unknown as {
@@ -450,36 +508,12 @@ export async function getTasks(employeeId?: string): Promise<TaskRecord[]> {
 
       const dbTasks = await prisma.task.findMany({
         where: whereClause,
-        include: {
-          assignedTo: {
-            select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
-          },
-          createdBy: { select: { fullName: true } },
-        },
+        include: taskInclude,
         orderBy: [{ priority: 'desc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
       });
 
       // Always return database tasks directly (even if empty list)
-      return dbTasks.map((t) => ({
-        id: t.id,
-        title: t.title,
-        description: t.description || undefined,
-        status: t.status as any,
-        priority: t.priority as any,
-        dueDate: t.dueDate ? t.dueDate.toISOString() : null,
-        assignedToId: t.assignedToId,
-        createdById: t.createdById,
-        createdByName: t.createdBy?.fullName,
-        createdAt: t.createdAt.toISOString(),
-        assignedTo: {
-          id: t.assignedTo.id,
-          employeeCode: t.assignedTo.employeeCode,
-          fullName: t.assignedTo.fullName,
-          designation: t.assignedTo.designation || 'Staff',
-          role: t.assignedTo.role as any,
-          email: t.assignedTo.email,
-        },
-      }));
+      return dbTasks.map(toTaskRecord);
     } catch (err) {
       console.error('[Database Error] Failed to retrieve tasks from PostgreSQL:', err);
       throw new Error('Database unavailable: could not load tasks. Check DATABASE_URL and that the schema is pushed.');
@@ -514,6 +548,7 @@ export async function createTask(data: {
   dueDate?: string | null;
   assignedToId: string;
   createdById?: string;
+  reminderIntervalMinutes?: number | null;
 }): Promise<TaskRecord> {
   const employees = await getEmployees();
   const assignee = employees.find(
@@ -522,6 +557,11 @@ export async function createTask(data: {
   if (!assignee) {
     throw new Error(`Assignee "${data.assignedToId}" not found.`);
   }
+
+  const reminderInterval = data.reminderIntervalMinutes || null;
+  const nextReminderAt = reminderInterval
+    ? new Date(Date.now() + reminderInterval * 60_000).toISOString()
+    : null;
 
   if (isDatabaseConfigured()) {
     try {
@@ -610,35 +650,13 @@ export async function createTask(data: {
           dueDate: parsedDueDate,
           assignedToId: dbAssignee.id,
           createdById: dbCreator.id,
+          reminderIntervalMinutes: reminderInterval,
+          nextReminderAt: nextReminderAt ? new Date(nextReminderAt) : null,
         },
-        include: {
-          assignedTo: {
-            select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
-          },
-          createdBy: { select: { fullName: true } },
-        },
+        include: taskInclude,
       });
 
-      return {
-        id: dbTask.id,
-        title: dbTask.title,
-        description: dbTask.description || undefined,
-        status: dbTask.status as any,
-        priority: dbTask.priority as any,
-        dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
-        assignedToId: dbTask.assignedToId,
-        createdById: dbTask.createdById,
-        createdByName: dbTask.createdBy?.fullName,
-        createdAt: dbTask.createdAt.toISOString(),
-        assignedTo: {
-          id: dbTask.assignedTo.id,
-          employeeCode: dbTask.assignedTo.employeeCode,
-          fullName: dbTask.assignedTo.fullName,
-          designation: dbTask.assignedTo.designation || 'Staff',
-          role: dbTask.assignedTo.role as any,
-          email: dbTask.assignedTo.email,
-        },
-      };
+      return toTaskRecord(dbTask);
     } catch (err) {
       console.error('[Database Task Creation Error]', err);
       throw new Error('Could not save task to the database. Check DATABASE_URL and that the schema is pushed.');
@@ -670,6 +688,9 @@ export async function createTask(data: {
     )?.fullName,
     createdAt: new Date().toISOString(),
     assignedTo: stripPassword(assignee),
+    reminderIntervalMinutes: reminderInterval,
+    nextReminderAt,
+    attachments: [],
   };
 
   tasks.unshift(newTask);
@@ -686,34 +707,10 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
           status: status as any,
           completedAt: status === 'COMPLETED' ? new Date() : null,
         },
-        include: {
-          assignedTo: {
-            select: { id: true, fullName: true, employeeCode: true, designation: true, role: true, email: true },
-          },
-          createdBy: { select: { fullName: true } },
-        },
+        include: taskInclude,
       });
 
-      return {
-        id: dbTask.id,
-        title: dbTask.title,
-        description: dbTask.description || undefined,
-        status: dbTask.status as any,
-        priority: dbTask.priority as any,
-        dueDate: dbTask.dueDate ? dbTask.dueDate.toISOString() : null,
-        assignedToId: dbTask.assignedToId,
-        createdById: dbTask.createdById,
-        createdByName: dbTask.createdBy?.fullName,
-        createdAt: dbTask.createdAt.toISOString(),
-        assignedTo: {
-          id: dbTask.assignedTo.id,
-          employeeCode: dbTask.assignedTo.employeeCode,
-          fullName: dbTask.assignedTo.fullName,
-          designation: dbTask.assignedTo.designation || 'Staff',
-          role: dbTask.assignedTo.role as any,
-          email: dbTask.assignedTo.email,
-        },
-      };
+      return toTaskRecord(dbTask);
     } catch (err) {
       console.warn('Prisma updateTaskStatus fallback:', err);
     }
@@ -723,6 +720,7 @@ export async function updateTaskStatus(taskId: string, status: string): Promise<
   const task = tasks.find((t) => t.id === taskId);
   if (task) {
     task.status = status as any;
+    task.completedAt = status === 'COMPLETED' ? new Date().toISOString() : null;
     saveLocalTasks(tasks);
     return task;
   }
@@ -740,7 +738,180 @@ export async function deleteTask(taskId: string): Promise<boolean> {
   const remaining = tasks.filter((t) => t.id !== taskId);
   if (remaining.length === tasks.length) return false;
   saveLocalTasks(remaining);
+  const blobs = loadLocalAttachmentBlobs();
+  for (const [id, blob] of Object.entries(blobs)) {
+    if (blob.taskId === taskId) delete blobs[id];
+  }
+  saveLocalAttachmentBlobs(blobs);
   return true;
+}
+
+// ---------- Task attachments (files & voice notes) ----------
+
+interface LocalAttachmentBlob {
+  taskId: string;
+  mimeType: string;
+  fileName: string;
+  dataBase64: string;
+}
+
+function getLocalAttachmentsFilePath(): string {
+  return path.join(process.cwd(), 'prisma', 'attachments_local.json');
+}
+
+function loadLocalAttachmentBlobs(): Record<string, LocalAttachmentBlob> {
+  const filePath = getLocalAttachmentsFilePath();
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalAttachmentBlobs(blobs: Record<string, LocalAttachmentBlob>) {
+  try {
+    fs.writeFileSync(getLocalAttachmentsFilePath(), JSON.stringify(blobs), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write attachments to disk:', e);
+  }
+}
+
+export async function addTaskAttachment(
+  taskId: string,
+  file: { kind: 'FILE' | 'VOICE'; fileName: string; mimeType: string; data: Buffer }
+): Promise<AttachmentMeta | null> {
+  if (isDatabaseConfigured()) {
+    const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    if (!task) return null;
+    const created = await prisma.taskAttachment.create({
+      data: {
+        taskId,
+        kind: file.kind,
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        size: file.data.length,
+        data: file.data,
+      },
+      select: { id: true, kind: true, fileName: true, mimeType: true, size: true, createdAt: true },
+    });
+    return { ...created, createdAt: created.createdAt.toISOString() };
+  }
+
+  assertLocalStoreIsSafe();
+  const tasks = loadLocalTasks();
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return null;
+
+  const meta: AttachmentMeta = {
+    id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    kind: file.kind,
+    fileName: file.fileName,
+    mimeType: file.mimeType,
+    size: file.data.length,
+    createdAt: new Date().toISOString(),
+  };
+  task.attachments = [...(task.attachments || []), meta];
+  saveLocalTasks(tasks);
+
+  const blobs = loadLocalAttachmentBlobs();
+  blobs[meta.id] = { taskId, mimeType: file.mimeType, fileName: file.fileName, dataBase64: file.data.toString('base64') };
+  saveLocalAttachmentBlobs(blobs);
+  return meta;
+}
+
+export async function getTaskAttachment(
+  taskId: string,
+  attachmentId: string
+): Promise<{ fileName: string; mimeType: string; data: Buffer } | null> {
+  if (isDatabaseConfigured()) {
+    const att = await prisma.taskAttachment.findFirst({
+      where: { id: attachmentId, taskId },
+      select: { fileName: true, mimeType: true, data: true },
+    });
+    return att ? { fileName: att.fileName, mimeType: att.mimeType, data: Buffer.from(att.data) } : null;
+  }
+
+  const blob = loadLocalAttachmentBlobs()[attachmentId];
+  if (!blob || blob.taskId !== taskId) return null;
+  return { fileName: blob.fileName, mimeType: blob.mimeType, data: Buffer.from(blob.dataBase64, 'base64') };
+}
+
+// ---------- Recurring reminders ----------
+
+export async function updateTaskReminder(
+  taskId: string,
+  intervalMinutes: number | null
+): Promise<TaskRecord | null> {
+  const nextReminderAt = intervalMinutes ? new Date(Date.now() + intervalMinutes * 60_000) : null;
+
+  if (isDatabaseConfigured()) {
+    const exists = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    if (!exists) return null;
+    const dbTask = await prisma.task.update({
+      where: { id: taskId },
+      data: { reminderIntervalMinutes: intervalMinutes, nextReminderAt },
+      include: taskInclude,
+    });
+    return toTaskRecord(dbTask);
+  }
+
+  assertLocalStoreIsSafe();
+  const tasks = loadLocalTasks();
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return null;
+  task.reminderIntervalMinutes = intervalMinutes;
+  task.nextReminderAt = nextReminderAt ? nextReminderAt.toISOString() : null;
+  saveLocalTasks(tasks);
+  return task;
+}
+
+/**
+ * Claims every open task whose reminder is due and advances its next slot.
+ * The conditional update means two overlapping runs can't both send the same reminder.
+ */
+export async function claimDueReminders(now = new Date()): Promise<TaskRecord[]> {
+  const nextSlot = (prev: Date, intervalMinutes: number) => {
+    const step = intervalMinutes * 60_000;
+    const next = prev.getTime() + step;
+    // If we fell behind (no runner for a while), don't fire a burst: resume from now
+    return new Date(next > now.getTime() ? next : now.getTime() + step);
+  };
+
+  if (isDatabaseConfigured()) {
+    const due = await prisma.task.findMany({
+      where: {
+        reminderIntervalMinutes: { not: null },
+        nextReminderAt: { lte: now },
+        status: { not: 'COMPLETED' },
+      },
+      include: taskInclude,
+      take: 100,
+    });
+
+    const claimed: TaskRecord[] = [];
+    for (const t of due) {
+      const result = await prisma.task.updateMany({
+        where: { id: t.id, nextReminderAt: t.nextReminderAt },
+        data: { nextReminderAt: nextSlot(t.nextReminderAt!, t.reminderIntervalMinutes!) },
+      });
+      if (result.count === 1) claimed.push(toTaskRecord(t));
+    }
+    return claimed;
+  }
+
+  if (process.env.VERCEL) return [];
+  const tasks = loadLocalTasks();
+  const claimed: TaskRecord[] = [];
+  for (const t of tasks) {
+    if (!t.reminderIntervalMinutes || !t.nextReminderAt || t.status === 'COMPLETED') continue;
+    const prev = new Date(t.nextReminderAt);
+    if (prev > now) continue;
+    t.nextReminderAt = nextSlot(prev, t.reminderIntervalMinutes).toISOString();
+    claimed.push(t);
+  }
+  if (claimed.length) saveLocalTasks(tasks);
+  return claimed;
 }
 
 export async function authenticateUser(identifier: string, rawPassword: string): Promise<EmployeeRecord | null> {
@@ -811,3 +982,132 @@ export async function authenticateUser(identifier: string, rawPassword: string):
   return null;
 }
 
+
+// ---------- Daily summary settings ----------
+
+export interface SummarySettings {
+  enabled: boolean;
+  time: string; // "HH:MM" in SUMMARY_TIMEZONE
+  lastSummaryDate: string | null;
+}
+
+export interface SummaryRecipient {
+  id: string;
+  employeeCode: string;
+  fullName: string;
+  role: 'DIRECTOR' | 'EMPLOYEE';
+}
+
+const DEFAULT_SUMMARY: SummarySettings = { enabled: true, time: '09:00', lastSummaryDate: null };
+
+function getLocalSummaryFilePath(): string {
+  return path.join(process.cwd(), 'prisma', 'summary_settings_local.json');
+}
+
+function loadLocalSummarySettings(): Record<string, SummarySettings> {
+  const filePath = getLocalSummaryFilePath();
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalSummarySettings(all: Record<string, SummarySettings>) {
+  try {
+    fs.writeFileSync(getLocalSummaryFilePath(), JSON.stringify(all, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Could not write summary settings to disk:', e);
+  }
+}
+
+function userLookup(userId: string) {
+  return { OR: [{ id: userId }, { employeeCode: userId.toUpperCase() }] };
+}
+
+export async function getSummarySettings(userId: string): Promise<SummarySettings | null> {
+  if (isDatabaseConfigured()) {
+    const user = await prisma.user.findFirst({
+      where: userLookup(userId),
+      select: { summaryEnabled: true, summaryTime: true, lastSummaryDate: true },
+    });
+    return user
+      ? { enabled: user.summaryEnabled, time: user.summaryTime, lastSummaryDate: user.lastSummaryDate }
+      : null;
+  }
+  return loadLocalSummarySettings()[userId] || { ...DEFAULT_SUMMARY };
+}
+
+export async function updateSummarySettings(
+  userId: string,
+  data: { enabled: boolean; time: string; lastSummaryDate?: string | null }
+): Promise<SummarySettings | null> {
+  if (isDatabaseConfigured()) {
+    const user = await prisma.user.findFirst({ where: userLookup(userId), select: { id: true } });
+    if (!user) return null;
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        summaryEnabled: data.enabled,
+        summaryTime: data.time,
+        ...(data.lastSummaryDate !== undefined ? { lastSummaryDate: data.lastSummaryDate } : {}),
+      },
+      select: { summaryEnabled: true, summaryTime: true, lastSummaryDate: true },
+    });
+    return { enabled: updated.summaryEnabled, time: updated.summaryTime, lastSummaryDate: updated.lastSummaryDate };
+  }
+
+  assertLocalStoreIsSafe();
+  const all = loadLocalSummarySettings();
+  const current = all[userId] || { ...DEFAULT_SUMMARY };
+  all[userId] = {
+    enabled: data.enabled,
+    time: data.time,
+    lastSummaryDate: data.lastSummaryDate !== undefined ? data.lastSummaryDate : current.lastSummaryDate,
+  };
+  saveLocalSummarySettings(all);
+  return all[userId];
+}
+
+/**
+ * Claims everyone whose summary time has passed today and who hasn't had today's summary yet.
+ * The conditional update makes overlapping runs send at most one summary per user per day.
+ */
+export async function claimDueSummaries(today: string, nowTime: string): Promise<SummaryRecipient[]> {
+  if (isDatabaseConfigured()) {
+    const due = await prisma.user.findMany({
+      where: {
+        isActive: true,
+        summaryEnabled: true,
+        summaryTime: { lte: nowTime },
+        OR: [{ lastSummaryDate: null }, { lastSummaryDate: { not: today } }],
+      },
+      select: { id: true, employeeCode: true, fullName: true, role: true, lastSummaryDate: true },
+    });
+
+    const claimed: SummaryRecipient[] = [];
+    for (const u of due) {
+      const result = await prisma.user.updateMany({
+        where: { id: u.id, lastSummaryDate: u.lastSummaryDate },
+        data: { lastSummaryDate: today },
+      });
+      if (result.count === 1) {
+        claimed.push({ id: u.id, employeeCode: u.employeeCode, fullName: u.fullName, role: u.role as any });
+      }
+    }
+    return claimed;
+  }
+
+  if (process.env.VERCEL) return [];
+  const all = loadLocalSummarySettings();
+  const claimed: SummaryRecipient[] = [];
+  for (const e of getLocalEmployees()) {
+    const settings = all[e.id] || { ...DEFAULT_SUMMARY };
+    if (!settings.enabled || settings.time > nowTime || settings.lastSummaryDate === today) continue;
+    all[e.id] = { ...settings, lastSummaryDate: today };
+    claimed.push({ id: e.id, employeeCode: e.employeeCode, fullName: e.fullName, role: e.role });
+  }
+  if (claimed.length) saveLocalSummarySettings(all);
+  return claimed;
+}

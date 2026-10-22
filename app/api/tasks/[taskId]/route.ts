@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteTask, updateTaskStatus } from '@/lib/data-store';
+import { deleteTask, updateTaskReminder, updateTaskStatus } from '@/lib/data-store';
 import { notifyDirectors } from '@/lib/push-service';
 
 export async function PATCH(
@@ -10,6 +10,19 @@ export async function PATCH(
     const { taskId } = params;
     const body = await req.json();
     const { status } = body;
+
+    // Reminder-only update: { reminderIntervalMinutes: number | null }
+    if (status === undefined && 'reminderIntervalMinutes' in body) {
+      const interval = body.reminderIntervalMinutes;
+      if (interval !== null && (!Number.isInteger(interval) || interval < 15 || interval > 10080)) {
+        return NextResponse.json({ error: 'Reminder interval must be 15 min to 7 days' }, { status: 400 });
+      }
+      const task = await updateTaskReminder(taskId, interval);
+      if (!task) {
+        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, task });
+    }
 
     const validStatuses = ['TO_DO', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED'];
     if (!status || !validStatuses.includes(status)) {

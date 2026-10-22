@@ -34,3 +34,18 @@ export function formatRelativeDueDate(dateInput: string | Date | null | undefine
     return { text: `Due in ${diffDays}d`, isOverdue: false };
   }
 }
+
+/** "every 30 min" / "every 2 hr" / "every 1 day" for a reminder interval in minutes */
+export function formatReminderInterval(minutes: number | null | undefined): string {
+  if (!minutes) return '';
+  if (minutes % 1440 === 0) return `every ${minutes / 1440} day${minutes === 1440 ? '' : 's'}`;
+  if (minutes % 60 === 0) return `every ${minutes / 60} hr`;
+  if (minutes > 60) return `every ${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+  return `every ${minutes} min`;
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

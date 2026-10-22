@@ -26,3 +26,5 @@ prisma/employees_custom.json
 .DS_Store
 Thumbs.db
 *.tsbuildinfo
+prisma/attachments_local.json
+prisma/summary_settings_local.json

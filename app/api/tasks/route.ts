@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createTask, getTasks } from '@/lib/data-store';
 import { sendNativePushNotification } from '@/lib/push-service';
+import { maybeRunDueReminders } from '@/lib/reminders';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -13,6 +14,8 @@ const createTaskSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   dueDate: z.string().optional().nullable(),
   createdById: z.string().optional(),
+  // Recurring reminder interval in minutes (15 min .. 7 days); omitted/null = off
+  reminderIntervalMinutes: z.number().int().min(15).max(10080).optional().nullable(),
 });
 
 export async function POST(req: NextRequest) {
@@ -28,6 +31,7 @@ export async function POST(req: NextRequest) {
       dueDate: validated.dueDate,
       assignedToId: validated.assignedToId,
       createdById: validated.createdById,
+      reminderIntervalMinutes: validated.reminderIntervalMinutes,
     });
 
     // Native mobile push notification dispatch (asynchronous, non-blocking)
@@ -56,6 +60,9 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const employeeId = searchParams.get('employeeId') || undefined;
+
+    // Dashboards poll this every 12s; use that to fire any recurring reminders that are due
+    await maybeRunDueReminders();
 
     const tasks = await getTasks(employeeId);
     return NextResponse.json({ tasks });

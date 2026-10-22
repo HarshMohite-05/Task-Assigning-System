@@ -35,8 +35,16 @@ import {
   RotateCcw,
   RefreshCw,
   Bell,
+  Paperclip,
+  Mic,
+  Repeat,
+  UserCheck,
+  Sun,
 } from 'lucide-react';
-import { formatDate, formatRelativeDueDate } from '@/lib/format-utils';
+import { formatDate, formatRelativeDueDate, formatReminderInterval, formatFileSize } from '@/lib/format-utils';
+import VoiceRecorder from '@/components/dashboard/VoiceRecorder';
+import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
+import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
 export interface Employee {
   id: string;
@@ -52,7 +60,12 @@ export interface TaskItem {
   status: 'TO_DO' | 'IN_PROGRESS' | 'BLOCKED' | 'COMPLETED';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
+  completedAt?: string | null;
+  assignedToId?: string;
+  createdById?: string;
   createdByName?: string;
+  reminderIntervalMinutes?: number | null;
+  attachments?: TaskAttachment[];
   assignedTo: Employee;
 }
 
@@ -76,32 +89,31 @@ const PRIORITY_BADGES = {
   URGENT: 'text-rose-600 bg-rose-50 border-rose-200 font-bold animate-pulse',
 };
 
-const TASK_TEMPLATES = [
-  {
-    title: 'Commercial RO Membrane Acid Flushing & CIP Cleaning',
-    description: 'Execute CIP acid wash on 5000 LPH unit. Verify permeate conductivity < 25 uS/cm.',
-    priority: 'URGENT',
-    daysAhead: 2,
-  },
-  {
-    title: 'Water Quality TDS Calibration & Online Sensor Testing',
-    description: 'Perform 3-point pH & TDS sensor calibration. Log discrepancy with SCADA.',
-    priority: 'HIGH',
-    daysAhead: 1,
-  },
-  {
-    title: 'Industrial Softener Resin Capacity Verification',
-    description: 'Calculate exchange capacity and brine tank recharge rate for pharmaceutical client.',
-    priority: 'MEDIUM',
-    daysAhead: 3,
-  },
-  {
-    title: 'Quarterly AMC Service Report & Client Sign-off',
-    description: 'Reconcile on-site service logbooks and prepare sign-off summary.',
-    priority: 'HIGH',
-    daysAhead: 4,
-  },
+// Recurring reminder presets (minutes); 'CUSTOM' lets the director type any hour value
+const REMINDER_PRESETS = [
+  { value: 30, label: 'Every 30 min' },
+  { value: 60, label: 'Every 1 hr' },
+  { value: 120, label: 'Every 2 hr' },
+  { value: 180, label: 'Every 3 hr' },
+  { value: 240, label: 'Every 4 hr' },
+  { value: 360, label: 'Every 6 hr' },
+  { value: 720, label: 'Every 12 hr' },
+  { value: 1440, label: 'Every 24 hr' },
 ];
+
+// Vercel caps serverless request bodies at 4.5 MB; each file is uploaded separately
+const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+type AssignerScope = 'SELF' | 'OTHERS' | 'ALL';
+
+const EMPTY_TASK_FORM = {
+  title: '',
+  description: '',
+  priority: 'MEDIUM',
+  dueDate: '',
+  reminder: '' as string, // '' = off, minutes as string, or 'CUSTOM'
+  customReminderHours: '',
+};
 
 export default function DirectorDashboard({ initialTasks, employees, directorId }: DashboardProps) {
   const [employeeList, setEmployeeList] = useState<Employee[]>(employees);
@@ -117,6 +129,16 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
   const [isSubmittingEmployee, setIsSubmittingEmployee] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'WORKLOAD' | 'STATUS'>('WORKLOAD');
+  const [assignerScope, setAssignerScope] = useState<AssignerScope>('SELF');
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+
+  // Tapping the daily summary push opens /director?summary=1
+  React.useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('summary') === '1') setIsSummaryOpen(true);
+  }, []);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [voiceNote, setVoiceNote] = useState<Blob | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Multi-Device Sync: Fetch fresh tasks from database
   const fetchLiveTasks = async (silent = false) => {
@@ -155,15 +177,25 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
   // Form State
   const [formData, setFormData] = useState({
-    title: '',
-    description: '',
+    ...EMPTY_TASK_FORM,
     assignedToId: employees[0]?.id || 'EMP001',
-    priority: 'MEDIUM',
-    dueDate: '',
   });
+
+  // "Assigned by" scope: tasks this director delegated vs. other directors
+  const isMine = (t: TaskItem) => Boolean(directorId) && t.createdById === directorId;
+  const scopeCounts = useMemo(() => {
+    const mine = tasks.filter(isMine).length;
+    return { SELF: mine, OTHERS: tasks.length - mine, ALL: tasks.length };
+  }, [tasks, directorId]);
+
+  const scopedTasks = useMemo(() => {
+    if (assignerScope === 'ALL') return tasks;
+    return tasks.filter((t) => (assignerScope === 'SELF' ? isMine(t) : !isMine(t)));
+  }, [tasks, assignerScope, directorId]);
 
   // Aggregated Analytics
   const analytics = useMemo(() => {
+    const tasks = scopedTasks;
     const total = tasks.length;
     const completed = tasks.filter((t) => t.status === 'COMPLETED').length;
     const blocked = tasks.filter((t) => t.status === 'BLOCKED').length;
@@ -229,11 +261,11 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
     ];
 
     return { total, completed, blocked, overdue, inProgress, todo, workloadData, statusChartData };
-  }, [tasks, employeeList]);
+  }, [scopedTasks, employeeList]);
 
   // Filtered Task List
   const filteredTasks = useMemo(() => {
-    return tasks.filter((task) => {
+    return scopedTasks.filter((task) => {
       const matchesSearch =
         (task.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (task.assignedTo?.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -248,7 +280,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
       return matchesSearch && matchesStatus && matchesEmployee;
     });
-  }, [tasks, searchTerm, selectedStatus, selectedEmployeeFilter]);
+  }, [scopedTasks, searchTerm, selectedStatus, selectedEmployeeFilter]);
 
   // Quick Task Status Change
   const handleUpdateStatus = async (taskId: string, newStatus: TaskItem['status']) => {
@@ -267,12 +299,78 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
     }
   };
 
+  const resolveReminderMinutes = (): number | null | 'INVALID' => {
+    if (!formData.reminder) return null;
+    if (formData.reminder !== 'CUSTOM') return Number(formData.reminder);
+    const hours = parseFloat(formData.customReminderHours);
+    if (!isFinite(hours) || hours < 0.25 || hours > 168) return 'INVALID';
+    return Math.round(hours * 60);
+  };
+
+  const handleAddFiles = (files: FileList | null) => {
+    if (!files) return;
+    const accepted: File[] = [];
+    const rejected: string[] = [];
+    Array.from(files).forEach((f) => {
+      if (f.size > MAX_ATTACHMENT_BYTES) rejected.push(f.name);
+      else accepted.push(f);
+    });
+    if (rejected.length) {
+      alert(`⚠️ These files are over 4 MB and were skipped:\n${rejected.join('\n')}`);
+    }
+    setPendingFiles((prev) => [...prev, ...accepted]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const uploadAttachments = async (taskId: string, files: File[], voice: Blob | null) => {
+    const uploads: { body: Blob; name: string; kind: 'FILE' | 'VOICE' }[] = files.map((f) => ({
+      body: f,
+      name: f.name,
+      kind: 'FILE',
+    }));
+    if (voice) {
+      const ext = voice.type.includes('mp4') || voice.type.includes('aac') ? 'm4a' : 'webm';
+      uploads.push({ body: voice, name: `voice-note-${Date.now()}.${ext}`, kind: 'VOICE' });
+    }
+
+    const saved: TaskAttachment[] = [];
+    const failed: string[] = [];
+    for (const u of uploads) {
+      try {
+        const fd = new FormData();
+        fd.append('file', u.body, u.name);
+        fd.append('kind', u.kind);
+        const res = await fetch(`/api/tasks/${taskId}/attachments`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.attachment) throw new Error(data?.error || 'Upload failed');
+        saved.push(data.attachment);
+      } catch {
+        failed.push(u.kind === 'VOICE' ? 'Voice note' : u.name);
+      }
+    }
+    return { saved, failed };
+  };
+
+  const closeTaskModal = () => {
+    setIsModalOpen(false);
+    setPendingFiles([]);
+    setVoiceNote(null);
+  };
+
   // Optimistic Task Assignment
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title.trim()) return;
 
+    const reminderMinutes = resolveReminderMinutes();
+    if (reminderMinutes === 'INVALID') {
+      alert('⚠️ Custom reminder must be between 0.25 and 168 hours.');
+      return;
+    }
+
     setIsSubmitting(true);
+    const filesToUpload = pendingFiles;
+    const voiceToUpload = voiceNote;
     const assignedEmployee = employeeList.find(
       (e) => e.id === formData.assignedToId || e.employeeCode === formData.assignedToId
     ) || {
@@ -297,11 +395,14 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       priority: formData.priority as any,
       status: 'TO_DO',
       dueDate: formattedDueDate,
+      createdById: directorId,
+      reminderIntervalMinutes: reminderMinutes,
+      attachments: [],
       assignedTo: assignedEmployee,
     };
 
     setTasks((prev) => [optimisticTask, ...prev]);
-    setIsModalOpen(false);
+    closeTaskModal();
 
     try {
       const res = await fetch('/api/tasks', {
@@ -314,6 +415,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
           dueDate: formattedDueDate,
           assignedToId: formData.assignedToId,
           createdById: directorId,
+          reminderIntervalMinutes: reminderMinutes,
         }),
       });
 
@@ -323,15 +425,25 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         throw new Error(data?.error || 'Failed to save task');
       }
 
-      setTasks((prev) => prev.map((t) => (t.id === optimisticTask.id ? data.task : t)));
+      const savedTask: TaskItem = data.task;
+      setTasks((prev) => prev.map((t) => (t.id === optimisticTask.id ? savedTask : t)));
 
       setFormData({
-        title: '',
-        description: '',
+        ...EMPTY_TASK_FORM,
         assignedToId: employeeList[0]?.id || 'EMP001',
-        priority: 'MEDIUM',
-        dueDate: '',
       });
+
+      if (filesToUpload.length || voiceToUpload) {
+        const { saved, failed } = await uploadAttachments(savedTask.id, filesToUpload, voiceToUpload);
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === savedTask.id ? { ...t, attachments: [...(t.attachments || []), ...saved] } : t
+          )
+        );
+        if (failed.length) {
+          alert(`⚠️ Task assigned, but these attachments failed to upload:\n${failed.join('\n')}`);
+        }
+      }
     } catch (err: any) {
       console.error('Task assignment notice:', err);
       setTasks((prev) => prev.filter((t) => t.id !== optimisticTask.id));
@@ -426,16 +538,24 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
 
 
-  const applyTemplate = (tpl: typeof TASK_TEMPLATES[0]) => {
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + tpl.daysAhead);
-    setFormData({
-      ...formData,
-      title: tpl.title,
-      description: tpl.description,
-      priority: tpl.priority,
-      dueDate: futureDate.toISOString().split('T')[0],
-    });
+  // Change or stop the recurring reminder on an existing task
+  const handleUpdateReminder = async (taskId: string, minutes: number | null) => {
+    const previous = tasks.find((t) => t.id === taskId)?.reminderIntervalMinutes ?? null;
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, reminderIntervalMinutes: minutes } : t)));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reminderIntervalMinutes: minutes }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update reminder');
+      }
+    } catch (err: any) {
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, reminderIntervalMinutes: previous } : t)));
+      alert(`⚠️ ${err.message || 'Error updating reminder'}`);
+    }
   };
 
   // Custom Interactive Tooltip for Workload Bar Chart
@@ -509,6 +629,13 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            onClick={() => setIsSummaryOpen(true)}
+            className="flex items-center justify-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-800 px-4 py-2.5 rounded-xl font-medium border border-amber-200 transition active:scale-95 text-sm"
+          >
+            <Sun className="w-4 h-4 text-amber-500" />
+            <span>Morning Summary</span>
+          </button>
+          <button
             onClick={() => {
               setTeamTab('LIST');
               setIsTeamModalOpen(true);
@@ -525,6 +652,41 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
             <Plus className="w-4 h-4" />
             <span>Delegate New Task</span>
           </button>
+        </div>
+      </div>
+
+      {/* Assigned-by Scope Filter (applies to KPIs, charts and task list) */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+          <UserCheck className="w-3.5 h-3.5" />
+          Assigned by
+        </span>
+        <div className="flex items-center bg-white border border-slate-200 p-1 rounded-xl shadow-xs w-full sm:w-auto">
+          {([
+            ['SELF', 'Me'],
+            ['OTHERS', 'Other Directors'],
+            ['ALL', 'All'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setAssignerScope(key)}
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 text-xs px-3.5 py-1.5 rounded-lg font-semibold transition ${
+                assignerScope === key
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <span>{label}</span>
+              <span
+                className={`text-[10px] px-1.5 rounded-full ${
+                  assignerScope === key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                }`}
+              >
+                {scopeCounts[key]}
+              </span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -806,9 +968,44 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                         {task.description}
                       </p>
                     )}
+                    <TaskAttachments taskId={task.id} attachments={task.attachments} />
                   </div>
 
                   <div className="flex items-center gap-3 self-end md:self-center shrink-0">
+                    {/* Recurring Reminder Control */}
+                    {task.status !== 'COMPLETED' && (
+                      <label
+                        className={`flex items-center gap-1 text-xs py-1 pl-2 pr-1 border rounded-lg ${
+                          task.reminderIntervalMinutes
+                            ? 'bg-amber-50 border-amber-300 text-amber-700'
+                            : 'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}
+                        title="Recurring reminder to the assignee"
+                      >
+                        <Repeat className="w-3.5 h-3.5 shrink-0" />
+                        <select
+                          value={task.reminderIntervalMinutes ? String(task.reminderIntervalMinutes) : ''}
+                          onChange={(e) =>
+                            handleUpdateReminder(task.id, e.target.value ? Number(e.target.value) : null)
+                          }
+                          className="bg-transparent font-medium focus:outline-none cursor-pointer"
+                        >
+                          <option value="">No repeat</option>
+                          {task.reminderIntervalMinutes &&
+                            !REMINDER_PRESETS.some((p) => p.value === task.reminderIntervalMinutes) && (
+                              <option value={String(task.reminderIntervalMinutes)}>
+                                {formatReminderInterval(task.reminderIntervalMinutes)}
+                              </option>
+                            )}
+                          {REMINDER_PRESETS.map((p) => (
+                            <option key={p.value} value={String(p.value)}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
                     {/* Quick Move Status Trigger */}
                     <select
                       value={task.status}
@@ -844,9 +1041,11 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       <div className="text-[10px] text-slate-400 font-mono">
                         {task.assignedTo?.employeeCode || 'STAFF'} • {task.assignedTo?.designation || 'Staff'}
                       </div>
-                      {task.createdByName && (
+                      {isMine(task) ? (
+                        <div className="text-[10px] font-semibold text-blue-600">Assigned by you</div>
+                      ) : task.createdByName ? (
                         <div className="text-[10px] text-slate-500">Assigned by {task.createdByName}</div>
-                      )}
+                      ) : null}
                     </div>
 
                     <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 font-bold flex items-center justify-center text-xs shrink-0">
@@ -910,6 +1109,28 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
                           <div className="text-xs font-bold text-slate-800 leading-snug">{t.title}</div>
 
+                          {(t.attachments?.length || (t.reminderIntervalMinutes && t.status !== 'COMPLETED')) ? (
+                            <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                              {t.attachments?.some((a) => a.kind === 'VOICE') && (
+                                <span className="flex items-center gap-0.5 text-violet-600" title="Has voice note">
+                                  <Mic className="w-3 h-3" />
+                                </span>
+                              )}
+                              {t.attachments?.some((a) => a.kind === 'FILE') && (
+                                <span className="flex items-center gap-0.5" title="Attachments">
+                                  <Paperclip className="w-3 h-3" />
+                                  {t.attachments.filter((a) => a.kind === 'FILE').length}
+                                </span>
+                              )}
+                              {t.reminderIntervalMinutes && t.status !== 'COMPLETED' && (
+                                <span className="flex items-center gap-0.5 text-amber-600" title="Recurring reminder">
+                                  <Repeat className="w-3 h-3" />
+                                  {formatReminderInterval(t.reminderIntervalMinutes)}
+                                </span>
+                              )}
+                            </div>
+                          ) : null}
+
                           <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                             <span className="text-[10px] text-slate-500 font-medium">
                               {t.assignedTo?.fullName?.split(' ')[0]}
@@ -952,41 +1173,29 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         )}
       </div>
 
-      {/* Delegation Modal with SOP Templates */}
+      <MorningSummaryModal
+        isOpen={isSummaryOpen}
+        onClose={() => setIsSummaryOpen(false)}
+        role="DIRECTOR"
+        userId={directorId || ''}
+        tasks={tasks}
+      />
+
+      {/* Delegation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4 max-h-[92vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b pb-3 border-slate-100">
               <h3 className="font-bold text-slate-800 flex items-center gap-2">
                 <span>Delegate Operational Task</span>
                 <Sparkles className="w-4 h-4 text-blue-500" />
               </h3>
               <button
-                onClick={() => setIsModalOpen(false)}
+                onClick={closeTaskModal}
                 className="text-slate-400 hover:text-slate-600 text-lg p-1"
               >
                 ✕
               </button>
-            </div>
-
-            {/* Quick Templates Strip */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                Quick SOP Templates
-              </label>
-              <div className="grid grid-cols-2 gap-1.5">
-                {TASK_TEMPLATES.map((tpl, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => applyTemplate(tpl)}
-                    className="p-2 text-left rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 transition text-xs space-y-0.5"
-                  >
-                    <div className="font-semibold text-slate-800 truncate">{tpl.title}</div>
-                    <div className="text-[10px] text-slate-400">{tpl.priority} • +{tpl.daysAhead}d</div>
-                  </button>
-                ))}
-              </div>
             </div>
 
             <form onSubmit={handleCreateTask} className="space-y-4 pt-1">
@@ -1063,10 +1272,106 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                 />
               </div>
 
+              {/* Recurring Reminder */}
+              <div>
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-1.5 mb-1">
+                  <Repeat className="w-3.5 h-3.5 text-amber-500" />
+                  Repeat Reminder to Assignee
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={formData.reminder}
+                    onChange={(e) => setFormData({ ...formData, reminder: e.target.value })}
+                    className="flex-1 min-w-0 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  >
+                    <option value="">Off (notify once)</option>
+                    {REMINDER_PRESETS.map((p) => (
+                      <option key={p.value} value={String(p.value)}>
+                        {p.label}
+                      </option>
+                    ))}
+                    <option value="CUSTOM">Custom interval…</option>
+                  </select>
+                  {formData.reminder === 'CUSTOM' && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <input
+                        type="number"
+                        min={0.25}
+                        max={168}
+                        step={0.25}
+                        required
+                        placeholder="e.g. 2"
+                        value={formData.customReminderHours}
+                        onChange={(e) => setFormData({ ...formData, customReminderHours: e.target.value })}
+                        className="w-20 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
+                      <span className="text-xs text-slate-500">hrs</span>
+                    </div>
+                  )}
+                </div>
+                {formData.reminder && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    A push reminder repeats until the task is marked Done.
+                  </p>
+                )}
+              </div>
+
+              {/* Attachments */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 block">
+                  Attachments & Voice Note
+                </label>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleAddFiles(e.target.files)}
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 text-sm font-medium py-2.5 rounded-xl border border-dashed border-slate-300 text-slate-600 bg-slate-50 hover:bg-slate-100 transition"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                    <span>Attach Files</span>
+                  </button>
+                  <div className={voiceNote ? 'sm:col-span-2' : ''}>
+                    <VoiceRecorder value={voiceNote} onChange={setVoiceNote} />
+                  </div>
+                </div>
+
+                {pendingFiles.length > 0 && (
+                  <ul className="space-y-1">
+                    {pendingFiles.map((f, i) => (
+                      <li
+                        key={`${f.name}-${i}`}
+                        className="flex items-center gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5"
+                      >
+                        <Paperclip className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate flex-1 text-slate-700">{f.name}</span>
+                        <span className="text-slate-400 shrink-0">{formatFileSize(f.size)}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
+                          className="p-0.5 text-slate-400 hover:text-rose-600 shrink-0"
+                          title="Remove"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-[11px] text-slate-400">Photos, PDFs, documents — up to 4 MB each.</p>
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={closeTaskModal}
                   className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
                   Cancel

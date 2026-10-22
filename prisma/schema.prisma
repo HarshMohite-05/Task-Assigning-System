@@ -38,6 +38,12 @@ model User {
   role              Role               @default(EMPLOYEE)
   phoneNumber       String?            @map("phone_number")
   isActive          Boolean            @default(true) @map("is_active")
+
+  // Daily summary push ("HH:MM" in Asia/Kolkata); lastSummaryDate = "YYYY-MM-DD" of last send
+  summaryEnabled    Boolean            @default(true) @map("summary_enabled")
+  summaryTime       String             @default("09:00") @map("summary_time")
+  lastSummaryDate   String?            @map("last_summary_date")
+
   createdAt         DateTime           @default(now()) @map("created_at")
   updatedAt         DateTime           @updatedAt @map("updated_at")
 
@@ -66,13 +72,41 @@ model Task {
   createdById  String        @map("created_by_id")
   createdBy    User          @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
+  // Recurring reminder push to the assignee (null = off)
+  reminderIntervalMinutes Int?      @map("reminder_interval_minutes")
+  nextReminderAt          DateTime? @map("next_reminder_at")
+
+  attachments  TaskAttachment[]
+
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
 
   @@index([assignedToId, status])
   @@index([status, priority])
   @@index([dueDate])
+  @@index([nextReminderAt])
   @@map("tasks")
+}
+
+enum AttachmentKind {
+  FILE
+  VOICE
+}
+
+model TaskAttachment {
+  id        String         @id @default(cuid())
+  taskId    String         @map("task_id")
+  kind      AttachmentKind @default(FILE)
+  fileName  String         @map("file_name")
+  mimeType  String         @map("mime_type")
+  size      Int
+  data      Bytes
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  task      Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@map("task_attachments")
 }
 
 model PushSubscription {
