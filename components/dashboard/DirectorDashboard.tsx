@@ -113,6 +113,7 @@ const EMPTY_TASK_FORM = {
   dueDate: '',
   reminder: '' as string, // '' = off, minutes as string, or 'CUSTOM'
   customReminderHours: '',
+  customReminderMinutes: '',
 };
 
 export default function DirectorDashboard({ initialTasks, employees, directorId }: DashboardProps) {
@@ -302,9 +303,12 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
   const resolveReminderMinutes = (): number | null | 'INVALID' => {
     if (!formData.reminder) return null;
     if (formData.reminder !== 'CUSTOM') return Number(formData.reminder);
-    const hours = parseFloat(formData.customReminderHours);
-    if (!isFinite(hours) || hours < 0.25 || hours > 168) return 'INVALID';
-    return Math.round(hours * 60);
+    const hours = formData.customReminderHours.trim() === '' ? 0 : Number(formData.customReminderHours);
+    const mins = formData.customReminderMinutes.trim() === '' ? 0 : Number(formData.customReminderMinutes);
+    if (!Number.isInteger(hours) || !Number.isInteger(mins) || hours < 0 || mins < 0 || mins > 59) return 'INVALID';
+    const total = hours * 60 + mins;
+    if (total < 15 || total > 10080) return 'INVALID';
+    return total;
   };
 
   const handleAddFiles = (files: FileList | null) => {
@@ -364,7 +368,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
     const reminderMinutes = resolveReminderMinutes();
     if (reminderMinutes === 'INVALID') {
-      alert('⚠️ Custom reminder must be between 0.25 and 168 hours.');
+      alert('⚠️ Custom reminder must be between 15 min and 168 hr (minutes 0–59).');
       return;
     }
 
@@ -1278,39 +1282,53 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                   <Repeat className="w-3.5 h-3.5 text-amber-500" />
                   Repeat Reminder to Assignee
                 </label>
-                <div className="flex gap-2">
-                  <select
-                    value={formData.reminder}
-                    onChange={(e) => setFormData({ ...formData, reminder: e.target.value })}
-                    className="flex-1 min-w-0 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  >
-                    <option value="">Off (notify once)</option>
-                    {REMINDER_PRESETS.map((p) => (
-                      <option key={p.value} value={String(p.value)}>
-                        {p.label}
-                      </option>
-                    ))}
-                    <option value="CUSTOM">Custom interval…</option>
-                  </select>
-                  {formData.reminder === 'CUSTOM' && (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <input
-                        type="number"
-                        min={0.25}
-                        max={168}
-                        step={0.25}
-                        required
-                        placeholder="e.g. 2"
-                        value={formData.customReminderHours}
-                        onChange={(e) => setFormData({ ...formData, customReminderHours: e.target.value })}
-                        className="w-20 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      />
-                      <span className="text-xs text-slate-500">hrs</span>
-                    </div>
-                  )}
-                </div>
+                <select
+                  value={formData.reminder}
+                  onChange={(e) => setFormData({ ...formData, reminder: e.target.value })}
+                  className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                >
+                  <option value="">Off (notify once)</option>
+                  {REMINDER_PRESETS.map((p) => (
+                    <option key={p.value} value={String(p.value)}>
+                      {p.label}
+                    </option>
+                  ))}
+                  <option value="CUSTOM">Custom interval…</option>
+                </select>
+                {formData.reminder === 'CUSTOM' && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs text-slate-500">Every</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={168}
+                      step={1}
+                      placeholder="0"
+                      value={formData.customReminderHours}
+                      onChange={(e) => setFormData({ ...formData, customReminderHours: e.target.value })}
+                      className="w-16 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      aria-label="Hours"
+                    />
+                    <span className="text-xs text-slate-500">hr</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={59}
+                      step={1}
+                      placeholder="0"
+                      value={formData.customReminderMinutes}
+                      onChange={(e) => setFormData({ ...formData, customReminderMinutes: e.target.value })}
+                      className="w-16 text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      aria-label="Minutes"
+                    />
+                    <span className="text-xs text-slate-500">min</span>
+                  </div>
+                )}
                 {formData.reminder && (
                   <p className="text-[11px] text-slate-400 mt-1">
+                    {formData.reminder === 'CUSTOM' && 'Minimum 15 min, maximum 7 days. '}
                     A push reminder repeats until the task is marked Done.
                   </p>
                 )}
