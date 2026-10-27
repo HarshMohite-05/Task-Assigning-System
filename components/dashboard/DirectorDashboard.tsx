@@ -46,6 +46,7 @@ import { formatDate, formatRelativeDueDate, formatReminderInterval, formatFileSi
 import VoiceRecorder from '@/components/dashboard/VoiceRecorder';
 import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
 import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
+import { sortTasksForDisplay } from '@/lib/task-sort';
 import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
 export interface Employee {
@@ -63,6 +64,7 @@ export interface TaskItem {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
   completedAt?: string | null;
+  createdAt?: string;
   assignedToId?: string;
   createdById?: string;
   createdByName?: string;
@@ -269,7 +271,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
   // Filtered Task List
   const filteredTasks = useMemo(() => {
-    return scopedTasks.filter((task) => {
+    return sortTasksForDisplay(scopedTasks).filter((task) => {
       const matchesSearch =
         (task.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (task.assignedTo?.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||

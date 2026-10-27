@@ -5,6 +5,7 @@ import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, Refres
 import PushNotificationPrompt from '@/components/push/PushNotificationPrompt';
 import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
 import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
+import { sortTasksForDisplay } from '@/lib/task-sort';
 import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
 import { formatDate, formatRelativeDueDate, formatReminderInterval } from '@/lib/format-utils';
@@ -17,6 +18,7 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: string | null;
   completedAt?: string | null;
+  createdAt?: string;
   assignedToId?: string;
   createdByName?: string;
   reminderIntervalMinutes?: number | null;
@@ -155,7 +157,7 @@ export default function EmployeeView({
             <p className="text-xs text-slate-400">No active tasks assigned to you right now.</p>
           </div>
         ) : (
-          tasks.map((task) => (
+          sortTasksForDisplay(tasks).map((task) => (
             <div
               key={task.id}
               className={`bg-white p-4 sm:p-5 rounded-2xl border transition shadow-xs ${
