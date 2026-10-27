@@ -57,7 +57,7 @@ export default function TaskUpdates({ taskId, updates, canPost = false, recipien
     <div className="space-y-2">
       {list.length > 0 && (
         <div className="space-y-1.5">
-          <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+          <div className="flex items-center gap-1 text-[11px] font-semibold text-sky-700">
             <MessageSquare className="w-3.5 h-3.5" />
             Notes & Replies ({list.length})
           </div>

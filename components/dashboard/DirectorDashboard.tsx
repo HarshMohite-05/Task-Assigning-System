@@ -38,6 +38,7 @@ import {
   Paperclip,
   Mic,
   Repeat,
+  MessageSquare,
   UserCheck,
   Sun,
 } from 'lucide-react';
@@ -1137,6 +1138,19 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                               )}
                             </div>
                           ) : null}
+
+                          {t.updates && t.updates.length > 0 && (
+                            <div
+                              className="bg-sky-50 border border-sky-200 rounded-lg px-2 py-1 text-[10px] text-slate-700"
+                              title={`${t.updates.length} note${t.updates.length > 1 ? 's' : ''} from the assignee`}
+                            >
+                              <div className="flex items-center gap-1 font-semibold text-sky-700">
+                                <MessageSquare className="w-3 h-3" />
+                                {t.updates.length} {t.updates.length > 1 ? 'replies' : 'reply'} · {t.updates[t.updates.length - 1].authorName.split(' ')[0]}
+                              </div>
+                              <p className="line-clamp-2 break-words">{t.updates[t.updates.length - 1].message}</p>
+                            </div>
+                          )}
 
                           <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
                             <span className="text-[10px] text-slate-500 font-medium">
