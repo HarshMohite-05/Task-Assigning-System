@@ -31,6 +31,15 @@ export interface TaskRecord {
   reminderIntervalMinutes?: number | null;
   nextReminderAt?: string | null;
   attachments?: AttachmentMeta[];
+  updates?: TaskUpdateRecord[];
+}
+
+export interface TaskUpdateRecord {
+  id: string;
+  authorId: string;
+  authorName: string;
+  message: string;
+  createdAt: string;
 }
 
 export interface AttachmentMeta {
@@ -49,6 +58,10 @@ const taskInclude = {
   createdBy: { select: { fullName: true } },
   attachments: {
     select: { id: true, kind: true, fileName: true, mimeType: true, size: true, createdAt: true },
+    orderBy: { createdAt: 'asc' as const },
+  },
+  updates: {
+    select: { id: true, authorId: true, authorName: true, message: true, createdAt: true },
     orderBy: { createdAt: 'asc' as const },
   },
 };
@@ -75,6 +88,13 @@ function toTaskRecord(t: any): TaskRecord {
       mimeType: a.mimeType,
       size: a.size,
       createdAt: a.createdAt.toISOString(),
+    })),
+    updates: (t.updates || []).map((u: any) => ({
+      id: u.id,
+      authorId: u.authorId,
+      authorName: u.authorName,
+      message: u.message,
+      createdAt: u.createdAt.toISOString(),
     })),
     assignedTo: {
       id: t.assignedTo.id,
@@ -835,6 +855,44 @@ export async function getTaskAttachment(
   const blob = loadLocalAttachmentBlobs()[attachmentId];
   if (!blob || blob.taskId !== taskId) return null;
   return { fileName: blob.fileName, mimeType: blob.mimeType, data: Buffer.from(blob.dataBase64, 'base64') };
+}
+
+// ---------- Task updates (progress notes from the assignee) ----------
+
+export async function addTaskUpdate(
+  taskId: string,
+  author: { id: string; name: string },
+  message: string
+): Promise<{ update: TaskUpdateRecord; task: TaskRecord } | null> {
+  if (isDatabaseConfigured()) {
+    const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    if (!task) return null;
+    const created = await prisma.taskUpdate.create({
+      data: { taskId, authorId: author.id, authorName: author.name, message },
+      select: { id: true, authorId: true, authorName: true, message: true, createdAt: true },
+    });
+    const dbTask = await prisma.task.findUnique({ where: { id: taskId }, include: taskInclude });
+    return {
+      update: { ...created, createdAt: created.createdAt.toISOString() },
+      task: toTaskRecord(dbTask),
+    };
+  }
+
+  assertLocalStoreIsSafe();
+  const tasks = loadLocalTasks();
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return null;
+
+  const update: TaskUpdateRecord = {
+    id: `upd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    authorId: author.id,
+    authorName: author.name,
+    message,
+    createdAt: new Date().toISOString(),
+  };
+  task.updates = [...(task.updates || []), update];
+  saveLocalTasks(tasks);
+  return { update, task };
 }
 
 // ---------- Recurring reminders ----------

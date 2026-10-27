@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Clock, AlertTriangle, CheckCircle2, Play, AlertCircle, Calendar, RefreshCw, UserCheck, Repeat, Sun } from 'lucide-react';
 import PushNotificationPrompt from '@/components/push/PushNotificationPrompt';
 import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
+import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
 import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
 import { formatDate, formatRelativeDueDate, formatReminderInterval } from '@/lib/format-utils';
@@ -20,6 +21,7 @@ interface Task {
   createdByName?: string;
   reminderIntervalMinutes?: number | null;
   attachments?: TaskAttachment[];
+  updates?: TaskUpdate[];
 }
 
 interface EmployeeViewProps {
@@ -224,6 +226,20 @@ export default function EmployeeView({
 
               <div className="mb-3">
                 <TaskAttachments taskId={task.id} attachments={task.attachments} />
+              </div>
+
+              <div className="mb-3">
+                <TaskUpdates
+                  taskId={task.id}
+                  updates={task.updates}
+                  canPost
+                  recipientName={task.createdByName}
+                  onPosted={(update) =>
+                    setTasks((prev) =>
+                      prev.map((t) => (t.id === task.id ? { ...t, updates: [...(t.updates || []), update] } : t))
+                    )
+                  }
+                />
               </div>
 
               {/* Status Action Buttons (One-tap interaction) */}

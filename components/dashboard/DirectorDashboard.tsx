@@ -44,6 +44,7 @@ import {
 import { formatDate, formatRelativeDueDate, formatReminderInterval, formatFileSize } from '@/lib/format-utils';
 import VoiceRecorder from '@/components/dashboard/VoiceRecorder';
 import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
+import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
 import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
 export interface Employee {
@@ -66,6 +67,7 @@ export interface TaskItem {
   createdByName?: string;
   reminderIntervalMinutes?: number | null;
   attachments?: TaskAttachment[];
+  updates?: TaskUpdate[];
   assignedTo: Employee;
 }
 
@@ -973,6 +975,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       </p>
                     )}
                     <TaskAttachments taskId={task.id} attachments={task.attachments} />
+                    <TaskUpdates taskId={task.id} updates={task.updates} />
                   </div>
 
                   <div className="flex items-center gap-3 self-end md:self-center shrink-0">

@@ -77,6 +77,7 @@ model Task {
   nextReminderAt          DateTime? @map("next_reminder_at")
 
   attachments  TaskAttachment[]
+  updates      TaskUpdate[]
 
   createdAt    DateTime      @default(now()) @map("created_at")
   updatedAt    DateTime      @updatedAt @map("updated_at")
@@ -107,6 +108,21 @@ model TaskAttachment {
 
   @@index([taskId])
   @@map("task_attachments")
+}
+
+// Progress notes the assignee posts on a task; author name is copied so it survives user deactivation
+model TaskUpdate {
+  id         String   @id @default(cuid())
+  taskId     String   @map("task_id")
+  authorId   String   @map("author_id")
+  authorName String   @map("author_name")
+  message    String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+  @@map("task_updates")
 }
 
 model PushSubscription {
