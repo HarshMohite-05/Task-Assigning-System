@@ -700,7 +700,23 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       </div>
 
       {/* KPI Metric Strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
+        <button
+          onClick={() => setSelectedStatus(selectedStatus === 'TO_DO' ? 'ALL' : 'TO_DO')}
+          className={`col-span-2 md:col-span-1 p-4 rounded-2xl border text-left transition ${
+            selectedStatus === 'TO_DO'
+              ? 'bg-slate-100 border-slate-500 ring-2 ring-slate-400/20 shadow-sm'
+              : 'bg-white border-slate-200 hover:border-slate-300 shadow-xs'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-xs font-semibold text-slate-600">Assigned</span>
+            <Send className="w-4 h-4 text-slate-500" />
+          </div>
+          <div className="text-2xl font-bold text-slate-800">{analytics.todo}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Not started yet · click to view</div>
+        </button>
+
         <button
           onClick={() => setSelectedStatus(selectedStatus === 'IN_PROGRESS' ? 'ALL' : 'IN_PROGRESS')}
           className={`p-4 rounded-2xl border text-left transition ${
