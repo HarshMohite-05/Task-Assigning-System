@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Sun, X, AlertTriangle, Calendar, Send, BellRing } from 'lucide-react';
-import { formatDate } from '@/lib/format-utils';
+import { formatDueDate } from '@/lib/format-utils';
 import { summarizeTasks, isOverdue, isDueToday, type SummaryTask } from '@/lib/summary-utils';
 
 const STATUS_STYLE: Record<SummaryTask['status'], [string, string]> = {
@@ -62,7 +62,7 @@ function TaskLine({ task, showAssigner = false }: { task: SummaryTask; showAssig
             >
               <Calendar className="w-3 h-3" />
               {overdue ? 'Overdue · ' : dueToday ? 'Due today · ' : ''}
-              {formatDate(task.dueDate)}
+              {formatDueDate(task.dueDate)}
             </span>
           )}
           {showAssigner && task.createdByName && <span>from {task.createdByName}</span>}

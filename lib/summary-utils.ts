@@ -50,13 +50,38 @@ export function zonedDateTime(d: Date, timeZone = SUMMARY_TIMEZONE) {
 
 const PRIORITY_RANK = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
-export function isOverdue(t: SummaryTask, now = new Date()) {
-  return Boolean(t.dueDate) && new Date(t.dueDate!) < now && t.status !== 'COMPLETED';
+/**
+ * Calendar day ('YYYY-MM-DD') a task is due on. The form picks a date only, which is stored
+ * as UTC midnight of that date — read those back as that same calendar day; any other
+ * timestamp is read in the team's zone.
+ */
+export function dueDay(dueDate: string | Date | null | undefined): string | null {
+  if (!dueDate) return null;
+  const d = typeof dueDate === 'string' ? new Date(dueDate) : dueDate;
+  if (isNaN(d.getTime())) return null;
+  const isDateOnly =
+    d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0 && d.getUTCMilliseconds() === 0;
+  return isDateOnly ? d.toISOString().slice(0, 10) : zonedDateTime(d).date;
 }
 
-export function isDueToday(t: SummaryTask, now = new Date()) {
-  if (!t.dueDate || t.status === 'COMPLETED' || isOverdue(t, now)) return false;
-  return zonedDateTime(new Date(t.dueDate)).date === zonedDateTime(now).date;
+/** Whole calendar days from today (team zone) until the due day; negative = overdue */
+export function daysUntilDue(dueDate: string | Date | null | undefined, now = new Date()): number | null {
+  const day = dueDay(dueDate);
+  if (!day) return null;
+  const today = zonedDateTime(now).date;
+  return Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+}
+
+/** A task is overdue only once its whole due day has passed, and never once completed */
+export function isOverdue(t: { dueDate?: string | null; status: string }, now = new Date()) {
+  if (t.status === 'COMPLETED') return false;
+  const days = daysUntilDue(t.dueDate, now);
+  return days !== null && days < 0;
+}
+
+export function isDueToday(t: { dueDate?: string | null; status: string }, now = new Date()) {
+  if (t.status === 'COMPLETED') return false;
+  return daysUntilDue(t.dueDate, now) === 0;
 }
 
 export function summarizeTasks<T extends SummaryTask>(tasks: T[], now = new Date()): SummaryStats<T> {

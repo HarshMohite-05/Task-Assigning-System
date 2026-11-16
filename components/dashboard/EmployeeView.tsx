@@ -8,7 +8,7 @@ import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
 import { sortTasksForDisplay } from '@/lib/task-sort';
 import MorningSummaryModal from '@/components/summary/MorningSummaryModal';
 
-import { formatDate, formatRelativeDueDate, formatReminderInterval } from '@/lib/format-utils';
+import { formatDueDate, formatRelativeDueDate, formatReminderInterval } from '@/lib/format-utils';
 
 interface Task {
   id: string;
@@ -51,10 +51,27 @@ export default function EmployeeView({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
 
-  // Tapping the daily summary push opens /employee?summary=1
+  const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
+
+  // Push notifications open /employee?summary=1 (daily summary) or /employee?taskId=... (a task)
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('summary') === '1') setIsSummaryOpen(true);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('summary') === '1') setIsSummaryOpen(true);
+    const taskId = params.get('taskId');
+    if (taskId) setHighlightTaskId(taskId);
+    if (params.has('summary') || params.has('taskId')) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
+
+  // Scroll the task from the notification into view and flash it
+  useEffect(() => {
+    if (!highlightTaskId) return;
+    const el = document.getElementById(`task-${highlightTaskId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setHighlightTaskId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightTaskId]);
 
   // Live Multi-Device Sync: Fetch freshly assigned tasks
   const fetchLiveTasks = async (silent = false) => {
@@ -81,10 +98,16 @@ export default function EmployeeView({
   }, [employeeId]);
 
   const updateStatus = async (taskId: string, newStatus: Task['status']) => {
+    const previous = tasks.find((t) => t.id === taskId);
+    if (!previous) return;
     setUpdatingTaskId(taskId);
     // Optimistic UI update
     setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      prev.map((t) =>
+        t.id === taskId
+          ? { ...t, status: newStatus, completedAt: newStatus === 'COMPLETED' ? new Date().toISOString() : null }
+          : t
+      )
     );
 
     try {
@@ -97,6 +120,7 @@ export default function EmployeeView({
       if (!res.ok) throw new Error('Status update failed');
     } catch (err) {
       console.error(err);
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? previous : t)));
       alert('Failed to update status. Please try again.');
     } finally {
       setUpdatingTaskId(null);
@@ -160,7 +184,10 @@ export default function EmployeeView({
           sortTasksForDisplay(tasks).map((task) => (
             <div
               key={task.id}
-              className={`bg-white p-4 sm:p-5 rounded-2xl border transition shadow-xs ${
+              id={`task-${task.id}`}
+              className={`bg-white p-4 sm:p-5 rounded-2xl border transition shadow-xs scroll-mt-24 ${
+                highlightTaskId === task.id ? 'ring-4 ring-blue-400/60 ' : ''
+              }${
                 task.status === 'COMPLETED'
                   ? 'border-emerald-200 bg-emerald-50/10 opacity-75'
                   : task.status === 'BLOCKED'
@@ -181,17 +208,17 @@ export default function EmployeeView({
                   <div className="flex items-center gap-1.5 text-xs text-slate-500">
                     <Calendar className="w-3.5 h-3.5 text-slate-400" />
                     <span suppressHydrationWarning className="font-medium">
-                      Due: {formatDate(task.dueDate)}
+                      Due: {formatDueDate(task.dueDate)}
                     </span>
                     <span
                       suppressHydrationWarning
                       className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                        formatRelativeDueDate(task.dueDate).isOverdue
+                        formatRelativeDueDate(task.dueDate, task.status).isOverdue
                           ? 'bg-rose-100 text-rose-700 font-bold'
                           : 'bg-slate-100 text-slate-600'
                       }`}
                     >
-                      {formatRelativeDueDate(task.dueDate).text}
+                      {formatRelativeDueDate(task.dueDate, task.status).text}
                     </span>
                   </div>
                 )}

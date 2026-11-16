@@ -42,7 +42,8 @@ import {
   UserCheck,
   Sun,
 } from 'lucide-react';
-import { formatDate, formatRelativeDueDate, formatReminderInterval, formatFileSize } from '@/lib/format-utils';
+import { formatDate, formatDueDate, formatRelativeDueDate, formatReminderInterval, formatFileSize } from '@/lib/format-utils';
+import { isOverdue } from '@/lib/summary-utils';
 import VoiceRecorder from '@/components/dashboard/VoiceRecorder';
 import TaskAttachments, { type TaskAttachment } from '@/components/tasks/TaskAttachments';
 import TaskUpdates, { type TaskUpdate } from '@/components/tasks/TaskUpdates';
@@ -138,10 +139,26 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
   const [assignerScope, setAssignerScope] = useState<AssignerScope>('SELF');
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
 
-  // Tapping the daily summary push opens /director?summary=1
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const taskListRef = React.useRef<HTMLDivElement>(null);
+
+  // Push notifications open /director?summary=1 (daily summary) or /director?taskId=... (a task)
   React.useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('summary') === '1') setIsSummaryOpen(true);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('summary') === '1') setIsSummaryOpen(true);
+    const taskId = params.get('taskId');
+    if (taskId) setSelectedTaskId(taskId);
+    if (params.has('summary') || params.has('taskId')) {
+      // Drop the params so a page refresh doesn't reopen the same panel
+      window.history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
+
+  // KPI cards and chart slices filter the task list; bring it into view so the click visibly does something
+  const applyStatusFilter = (status: string, toggle = true) => {
+    setSelectedStatus((prev) => (toggle && prev === status ? 'ALL' : status));
+    requestAnimationFrame(() => taskListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [voiceNote, setVoiceNote] = useState<Blob | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -208,10 +225,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
     const inProgress = tasks.filter((t) => t.status === 'IN_PROGRESS').length;
     const todo = tasks.filter((t) => t.status === 'TO_DO').length;
 
-    const now = new Date();
-    const overdue = tasks.filter(
-      (t) => t.dueDate && new Date(t.dueDate) < now && t.status !== 'COMPLETED'
-    ).length;
+    const overdue = tasks.filter((t) => isOverdue(t)).length;
 
     // Detailed Workload per employee with priority breakdown
     const workloadMap: Record<
@@ -277,7 +291,9 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         (task.assignedTo?.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (task.assignedTo?.employeeCode || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-      const matchesStatus = selectedStatus === 'ALL' || task.status === selectedStatus;
+      const matchesStatus =
+        selectedStatus === 'ALL' ||
+        (selectedStatus === 'OVERDUE' ? isOverdue(task) : task.status === selectedStatus);
 
       const matchesEmployee =
         !selectedEmployeeFilter ||
@@ -290,18 +306,28 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
   // Quick Task Status Change
   const handleUpdateStatus = async (taskId: string, newStatus: TaskItem['status']) => {
+    const previous = tasks.find((t) => t.id === taskId);
+    if (!previous || previous.status === newStatus) return;
     setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      prev.map((t) =>
+        t.id === taskId
+          ? { ...t, status: newStatus, completedAt: newStatus === 'COMPLETED' ? new Date().toISOString() : null }
+          : t
+      )
     );
 
     try {
-      await fetch(`/api/tasks/${taskId}`, {
+      const res = await fetch(`/api/tasks/${taskId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
-    } catch (err) {
-      console.error('Failed to update status:', err);
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Failed to update status');
+      if (data?.task) setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...data.task } : t)));
+    } catch (err: any) {
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? previous : t)));
+      alert(`⚠️ ${err.message || 'Failed to update status. Please try again.'}`);
     }
   };
 
@@ -520,6 +546,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         throw new Error(data.error || 'Failed to delete task');
       }
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setSelectedTaskId((cur) => (cur === taskId ? null : cur));
     } catch (err: any) {
       alert(`⚠️ ${err.message || 'Error deleting task'}`);
     }
@@ -566,6 +593,8 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       alert(`⚠️ ${err.message || 'Error updating reminder'}`);
     }
   };
+
+  const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) || null : null;
 
   // Custom Interactive Tooltip for Workload Bar Chart
   const CustomWorkloadTooltip = ({ active, payload }: any) => {
@@ -702,7 +731,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       {/* KPI Metric Strip */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
         <button
-          onClick={() => setSelectedStatus(selectedStatus === 'TO_DO' ? 'ALL' : 'TO_DO')}
+          onClick={() => applyStatusFilter('TO_DO')}
           className={`col-span-2 md:col-span-1 p-4 rounded-2xl border text-left transition ${
             selectedStatus === 'TO_DO'
               ? 'bg-slate-100 border-slate-500 ring-2 ring-slate-400/20 shadow-sm'
@@ -718,7 +747,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         </button>
 
         <button
-          onClick={() => setSelectedStatus(selectedStatus === 'IN_PROGRESS' ? 'ALL' : 'IN_PROGRESS')}
+          onClick={() => applyStatusFilter('IN_PROGRESS')}
           className={`p-4 rounded-2xl border text-left transition ${
             selectedStatus === 'IN_PROGRESS'
               ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-400/20 shadow-sm'
@@ -734,7 +763,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         </button>
 
         <button
-          onClick={() => setSelectedStatus(selectedStatus === 'BLOCKED' ? 'ALL' : 'BLOCKED')}
+          onClick={() => applyStatusFilter('BLOCKED')}
           className={`p-4 rounded-2xl border text-left transition ${
             selectedStatus === 'BLOCKED'
               ? 'bg-rose-100/50 border-rose-500 ring-2 ring-rose-400/20 shadow-sm'
@@ -749,17 +778,24 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
           <div className="text-[10px] text-rose-500 mt-0.5">Blocked operational tasks</div>
         </button>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        <button
+          onClick={() => applyStatusFilter('OVERDUE')}
+          className={`p-4 rounded-2xl border text-left transition ${
+            selectedStatus === 'OVERDUE'
+              ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/20 shadow-sm'
+              : 'bg-white border-slate-200 hover:border-slate-300 shadow-xs'
+          }`}
+        >
           <div className="flex items-center justify-between text-slate-400 mb-1">
             <span className="text-xs font-semibold text-slate-600">Overdue SLA</span>
             <AlertCircle className="w-4 h-4 text-amber-500" />
           </div>
-          <div className="text-2xl font-bold text-amber-600">{analytics.overdue}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5">Requires priority triage</div>
-        </div>
+          <div suppressHydrationWarning className="text-2xl font-bold text-amber-600">{analytics.overdue}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Past due date · click to view</div>
+        </button>
 
         <button
-          onClick={() => setSelectedStatus(selectedStatus === 'COMPLETED' ? 'ALL' : 'COMPLETED')}
+          onClick={() => applyStatusFilter('COMPLETED')}
           className={`p-4 rounded-2xl border text-left transition ${
             selectedStatus === 'COMPLETED'
               ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-400/20 shadow-sm'
@@ -855,7 +891,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       'Blocked': 'BLOCKED',
                       'Completed': 'COMPLETED',
                     };
-                    setSelectedStatus(map[entry.name] || 'ALL');
+                    applyStatusFilter(map[entry.name] || 'ALL', false);
                   }}
                 >
                   {analytics.statusChartData.map((entry, index) => (
@@ -873,7 +909,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
       </div>
 
       {/* Task Delegation Engine with List / Kanban Toggle */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+      <div ref={taskListRef} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden scroll-mt-20">
         {/* Controls Toolbar */}
         <div className="p-4 border-b border-slate-200 flex flex-col md:flex-row gap-3 items-center justify-between">
           <div className="flex items-center gap-3 w-full md:w-auto">
@@ -920,7 +956,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
 
           {/* Status Filter Badges */}
           <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
-            {['ALL', 'TO_DO', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED'].map((statusKey) => (
+            {['ALL', 'TO_DO', 'IN_PROGRESS', 'BLOCKED', 'OVERDUE', 'COMPLETED'].map((statusKey) => (
               <button
                 key={statusKey}
                 onClick={() => setSelectedStatus(statusKey)}
@@ -930,7 +966,11 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                {statusKey === 'ALL' ? 'All Tasks' : STATUS_CONFIG[statusKey as keyof typeof STATUS_CONFIG]?.label}
+                {statusKey === 'ALL'
+                  ? 'All Tasks'
+                  : statusKey === 'OVERDUE'
+                  ? `Overdue (${analytics.overdue})`
+                  : STATUS_CONFIG[statusKey as keyof typeof STATUS_CONFIG]?.label}
               </button>
             ))}
           </div>
@@ -948,7 +988,16 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
               filteredTasks.map((task) => (
                 <div
                   key={task.id}
-                  className="p-4 hover:bg-slate-50/80 transition flex flex-col md:flex-row md:items-center justify-between gap-3"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedTaskId(task.id)}
+                  onKeyDown={(e) => {
+                    if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      setSelectedTaskId(task.id);
+                    }
+                  }}
+                  className="p-4 hover:bg-slate-50/80 transition flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer"
                 >
                   <div className="space-y-1.5 max-w-xl">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -971,17 +1020,17 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                         <div className="flex items-center gap-1 text-xs text-slate-500">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
                           <span suppressHydrationWarning className="font-medium">
-                            Due: {formatDate(task.dueDate)}
+                            Due: {formatDueDate(task.dueDate)}
                           </span>
                           <span
                             suppressHydrationWarning
                             className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                              formatRelativeDueDate(task.dueDate).isOverdue
+                              formatRelativeDueDate(task.dueDate, task.status).isOverdue
                                 ? 'bg-rose-100 text-rose-700 font-bold'
                                 : 'bg-slate-100 text-slate-600'
                             }`}
                           >
-                            {formatRelativeDueDate(task.dueDate).text}
+                            {formatRelativeDueDate(task.dueDate, task.status).text}
                           </span>
                         </div>
                       )}
@@ -993,11 +1042,16 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                         {task.description}
                       </p>
                     )}
-                    <TaskAttachments taskId={task.id} attachments={task.attachments} />
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <TaskAttachments taskId={task.id} attachments={task.attachments} />
+                    </div>
                     <TaskUpdates taskId={task.id} updates={task.updates} />
                   </div>
 
-                  <div className="flex items-center gap-3 self-end md:self-center shrink-0">
+                  <div
+                    className="flex flex-wrap items-center justify-end gap-3 self-end md:self-center shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {/* Recurring Reminder Control */}
                     {task.status !== 'COMPLETED' && (
                       <label
@@ -1113,7 +1167,16 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                       colTasks.map((t) => (
                         <div
                           key={t.id}
-                          className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2 hover:shadow-xs transition"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedTaskId(t.id)}
+                          onKeyDown={(e) => {
+                            if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              setSelectedTaskId(t.id);
+                            }
+                          }}
+                          className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2 hover:shadow-xs hover:border-blue-300 transition cursor-pointer"
                         >
                           <div className="flex items-center justify-between">
                             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${PRIORITY_BADGES[t.priority]}`}>
@@ -1123,12 +1186,12 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                               <span
                                 suppressHydrationWarning
                                 className={`text-[10px] font-medium ${
-                                  formatRelativeDueDate(t.dueDate).isOverdue
+                                  formatRelativeDueDate(t.dueDate, t.status).isOverdue
                                     ? 'text-rose-600 font-bold'
                                     : 'text-slate-400'
                                 }`}
                               >
-                                {formatDate(t.dueDate)}
+                                {formatDueDate(t.dueDate)}
                               </span>
                             )}
                           </div>
@@ -1170,7 +1233,10 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                             </div>
                           )}
 
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                          <div
+                            className="pt-2 border-t border-slate-100 flex items-center justify-between"
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <span className="text-[10px] text-slate-500 font-medium">
                               {t.assignedTo?.fullName?.split(' ')[0]}
                             </span>
@@ -1211,6 +1277,18 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
           </div>
         )}
       </div>
+
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          isMine={isMine(selectedTask)}
+          onClose={() => setSelectedTaskId(null)}
+          onStatusChange={(status) => handleUpdateStatus(selectedTask.id, status)}
+          onReminderChange={(minutes) => handleUpdateReminder(selectedTask.id, minutes)}
+          onRemind={() => handleRemindTask(selectedTask.id, selectedTask.assignedTo?.fullName)}
+          onDelete={() => handleDeleteTask(selectedTask.id, selectedTask.title)}
+        />
+      )}
 
       <MorningSummaryModal
         isOpen={isSummaryOpen}
@@ -1662,6 +1740,189 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface TaskDetailModalProps {
+  task: TaskItem;
+  isMine: boolean;
+  onClose: () => void;
+  onStatusChange: (status: TaskItem['status']) => void;
+  onReminderChange: (minutes: number | null) => void;
+  onRemind: () => void;
+  onDelete: () => void;
+}
+
+function TaskDetailModal({
+  task,
+  isMine,
+  onClose,
+  onStatusChange,
+  onReminderChange,
+  onRemind,
+  onDelete,
+}: TaskDetailModalProps) {
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const due = formatRelativeDueDate(task.dueDate, task.status);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={task.title}
+        className="bg-white w-full sm:max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl p-5 sm:p-6 space-y-4 max-h-[92vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1.5 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STATUS_CONFIG[task.status]?.color}`}>
+                {STATUS_CONFIG[task.status]?.label}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-md border ${PRIORITY_BADGES[task.priority]}`}>
+                {task.priority}
+              </span>
+            </div>
+            <h3 className="text-base font-bold text-slate-800 break-words">{task.title}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition shrink-0"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Assignee</div>
+            <div className="font-bold text-slate-800">{task.assignedTo?.fullName || 'Assigned Staff'}</div>
+            <div className="text-[10px] text-slate-500 font-mono">
+              {task.assignedTo?.employeeCode || 'STAFF'} • {task.assignedTo?.designation || 'Staff'}
+            </div>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Due date</div>
+            {task.dueDate ? (
+              <>
+                <div suppressHydrationWarning className="font-bold text-slate-800">{formatDueDate(task.dueDate)}</div>
+                <div
+                  suppressHydrationWarning
+                  className={`text-[10px] font-medium ${due.isOverdue ? 'text-rose-600 font-bold' : 'text-slate-500'}`}
+                >
+                  {due.text}
+                </div>
+              </>
+            ) : (
+              <div className="text-slate-500">No deadline</div>
+            )}
+          </div>
+          <div className="col-span-2 text-[11px] text-slate-500">
+            {isMine ? (
+              <span className="font-semibold text-blue-600">Assigned by you</span>
+            ) : task.createdByName ? (
+              <span>Assigned by <span className="font-semibold text-slate-700">{task.createdByName}</span></span>
+            ) : null}
+            {task.createdAt && <span suppressHydrationWarning> · on {formatDate(task.createdAt)}</span>}
+            {task.status === 'COMPLETED' && task.completedAt && (
+              <span suppressHydrationWarning> · completed {formatDate(task.completedAt)}</span>
+            )}
+          </div>
+        </div>
+
+        {task.description && (
+          <div>
+            <div className="text-xs font-semibold text-slate-600 mb-1">SOP Instructions & Checklist</div>
+            <p className="text-sm text-slate-700 whitespace-pre-wrap break-words bg-slate-50 border border-slate-100 rounded-xl p-3">
+              {task.description}
+            </p>
+          </div>
+        )}
+
+        <TaskAttachments taskId={task.id} attachments={task.attachments} />
+        <TaskUpdates taskId={task.id} updates={task.updates} />
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-100">
+          <label className="text-xs font-semibold text-slate-600 space-y-1">
+            <span className="block">Status</span>
+            <select
+              value={task.status}
+              onChange={(e) => onStatusChange(e.target.value as TaskItem['status'])}
+              className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            >
+              <option value="TO_DO">To-Do</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="BLOCKED">Blocked</option>
+              <option value="COMPLETED">Completed</option>
+            </select>
+          </label>
+          {task.status !== 'COMPLETED' && (
+            <label className="text-xs font-semibold text-slate-600 space-y-1">
+              <span className="flex items-center gap-1">
+                <Repeat className="w-3.5 h-3.5 text-amber-500" /> Repeat reminder
+              </span>
+              <select
+                value={task.reminderIntervalMinutes ? String(task.reminderIntervalMinutes) : ''}
+                onChange={(e) => onReminderChange(e.target.value ? Number(e.target.value) : null)}
+                className="w-full text-sm p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              >
+                <option value="">No repeat</option>
+                {task.reminderIntervalMinutes &&
+                  !REMINDER_PRESETS.some((p) => p.value === task.reminderIntervalMinutes) && (
+                    <option value={String(task.reminderIntervalMinutes)}>
+                      {formatReminderInterval(task.reminderIntervalMinutes)}
+                    </option>
+                  )}
+                {REMINDER_PRESETS.map((p) => (
+                  <option key={p.value} value={String(p.value)}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <button
+            onClick={onDelete}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 rounded-xl transition"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete
+          </button>
+          <div className="flex items-center gap-2">
+            {task.status !== 'COMPLETED' && (
+              <button
+                onClick={onRemind}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition"
+              >
+                <Bell className="w-4 h-4" />
+                Send reminder
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
