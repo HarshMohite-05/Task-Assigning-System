@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSession } from '@/lib/session';
 import { sendSummaryTo } from '@/lib/summary';
 
 export const dynamic = 'force-dynamic';
@@ -7,11 +7,8 @@ export const maxDuration = 30;
 
 /** Sends the signed-in user their summary push right now ("Send to my phone now") */
 export async function POST() {
-  let user: any = null;
-  try {
-    user = JSON.parse(cookies().get('taskstream_user')?.value || 'null');
-  } catch {}
-  if (!user?.id && !user?.employeeCode) {
+  const user = getSession();
+  if (!user) {
     return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
   }
 

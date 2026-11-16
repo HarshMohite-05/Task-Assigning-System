@@ -2,24 +2,15 @@ import React from 'react';
 import EmployeeView from '@/components/dashboard/EmployeeView';
 import SignOutButton from '@/components/auth/SignOutButton';
 import { getEmployees, getTasks } from '@/lib/data-store';
-import { cookies } from 'next/headers';
+import { getSession } from '@/lib/session';
 import { redirect } from 'next/navigation';
 import { Wrench } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
 
 export default async function EmployeePage() {
-  const cookieStore = cookies();
-  const sessionCookie = cookieStore.get('taskstream_user');
-
-  let user = null;
-  if (sessionCookie?.value) {
-    try {
-      user = JSON.parse(sessionCookie.value);
-    } catch (e) {
-      user = null;
-    }
-  }
+  // Only a correctly signed session counts; edited or old-format cookies send you to login
+  const user = getSession();
 
   // Strict Authentication Guard
   if (!user) {

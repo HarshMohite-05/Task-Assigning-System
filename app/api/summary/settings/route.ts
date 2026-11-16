@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getSession } from '@/lib/session';
 import { getSummarySettings, updateSummarySettings } from '@/lib/data-store';
 import { zonedDateTime, SUMMARY_TIMEZONE } from '@/lib/summary-utils';
 
 export const dynamic = 'force-dynamic';
 
 function sessionUserId(): string | null {
-  try {
-    const user = JSON.parse(cookies().get('taskstream_user')?.value || 'null');
-    return user?.id || user?.employeeCode || null;
-  } catch {
-    return null;
-  }
+  const user = getSession();
+  return user ? user.id || user.employeeCode : null;
 }
 
 export async function GET() {

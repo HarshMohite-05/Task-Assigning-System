@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateUser } from '@/lib/data-store';
+import { setSessionCookie, type SessionUser } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
     // Clear rate limit counter on successful login
     clearRateLimit(rateLimitKey);
 
-    const sessionUser = {
+    const sessionUser: SessionUser = {
       id: user.id,
       employeeCode: user.employeeCode,
       fullName: user.fullName,
@@ -84,14 +85,8 @@ export async function POST(req: NextRequest) {
       redirectUrl,
     });
 
-    // Secure HTTP-Only session cookie prevents XSS session hijacking
-    response.cookies.set('taskstream_user', JSON.stringify(sessionUser), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-    });
+    // Signed, HTTP-only session cookie: it can't be read by scripts or edited by the client
+    setSessionCookie(response, sessionUser);
 
     return response;
   } catch (error: any) {

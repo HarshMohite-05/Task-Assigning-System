@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getTasks } from '@/lib/data-store';
 import { sendNativePushNotification } from '@/lib/push-service';
+import { requireSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -9,6 +10,8 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: { taskId: string } }
 ) {
+  const auth = requireSession('DIRECTOR');
+  if (auth.error) return auth.error;
   try {
     const tasks = await getTasks();
     const task = tasks.find((t) => t.id === params.taskId);

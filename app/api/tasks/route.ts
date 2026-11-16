@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createTask, getTasks } from '@/lib/data-store';
 import { sendNativePushNotification } from '@/lib/push-service';
 import { maybeRunDueReminders } from '@/lib/reminders';
+import { requireSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -19,6 +20,8 @@ const createTaskSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  const auth = requireSession('DIRECTOR');
+  if (auth.error) return auth.error;
   try {
     const body = await req.json();
     const validated = createTaskSchema.parse(body);
@@ -30,7 +33,8 @@ export async function POST(req: NextRequest) {
       priority: validated.priority,
       dueDate: validated.dueDate,
       assignedToId: validated.assignedToId,
-      createdById: validated.createdById,
+      // The assigner is always the signed-in director, never a value sent by the browser
+      createdById: auth.user.id,
       reminderIntervalMinutes: validated.reminderIntervalMinutes,
     });
 
@@ -57,9 +61,13 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireSession();
+  if (auth.error) return auth.error;
   try {
     const { searchParams } = new URL(req.url);
-    const employeeId = searchParams.get('employeeId') || undefined;
+    // Employees only ever get their own tasks; directors may see everyone's or filter by employee
+    const employeeId =
+      auth.user.role === 'DIRECTOR' ? searchParams.get('employeeId') || undefined : auth.user.id || auth.user.employeeCode;
 
     // Dashboards poll this every 12s; use that to fire any recurring reminders that are due
     await maybeRunDueReminders();

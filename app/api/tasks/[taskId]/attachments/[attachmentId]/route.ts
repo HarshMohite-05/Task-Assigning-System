@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { getTaskAttachment } from '@/lib/data-store';
+import { getTaskAttachment, getTasks } from '@/lib/data-store';
+import { isAssignedTo, requireSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,8 +11,13 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { taskId: string; attachmentId: string } }
 ) {
-  if (!cookies().get('taskstream_user')?.value) {
-    return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
+  const auth = requireSession();
+  if (auth.error) return auth.error;
+  if (auth.user.role !== 'DIRECTOR') {
+    const task = (await getTasks()).find((t) => t.id === params.taskId);
+    if (!task || !isAssignedTo(task, auth.user)) {
+      return NextResponse.json({ error: 'Attachment not found' }, { status: 404 });
+    }
   }
 
   try {

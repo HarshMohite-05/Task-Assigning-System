@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { addTaskUpdate, getTasks } from '@/lib/data-store';
 import { notifyDirectors } from '@/lib/push-service';
+import { getSession, isAssignedTo } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -12,13 +12,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { taskId: string } }
 ) {
-  let user: any = null;
-  try {
-    user = JSON.parse(cookies().get('taskstream_user')?.value || 'null');
-  } catch {
-    user = null;
-  }
-  if (!user?.employeeCode) {
+  const user = getSession();
+  if (!user) {
     return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
   }
 
@@ -34,8 +29,8 @@ export async function POST(
 
     // Employees may only post on tasks assigned to them; directors can post on any task
     if (user.role !== 'DIRECTOR') {
-      const ownTasks = await getTasks(user.employeeCode);
-      if (!ownTasks.some((t) => t.id === params.taskId)) {
+      const task = (await getTasks()).find((t) => t.id === params.taskId);
+      if (!task || !isAssignedTo(task, user)) {
         return NextResponse.json({ error: 'You can only update tasks assigned to you' }, { status: 403 });
       }
     }

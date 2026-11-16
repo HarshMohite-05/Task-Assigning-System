@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getSession } from '@/lib/session';
 
 export async function POST(req: NextRequest) {
+  const session = getSession();
+  if (!session) {
+    return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
+  }
   try {
     const body = await req.json();
-    const { userId, subscription, userAgent } = body;
+    const { subscription, userAgent } = body;
+    // Notifications always go to the signed-in user, whatever userId the page sends
+    const userId = session.id || session.employeeCode;
 
     if (!userId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return NextResponse.json({ error: 'Invalid subscription payload' }, { status: 400 });

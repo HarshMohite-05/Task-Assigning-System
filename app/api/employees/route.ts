@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getEmployees, createEmployee, deleteEmployee } from '@/lib/data-store';
+import { requireSession } from '@/lib/session';
+
+// Never send password fields to the browser
+function publicEmployee(e: any) {
+  const { password: _pw, passwordHash: _ph, ...rest } = e || {};
+  return rest;
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +22,8 @@ const createEmployeeSchema = z.object({
 });
 
 export async function GET(req: NextRequest) {
+  const auth = requireSession();
+  if (auth.error) return auth.error;
   try {
     const { searchParams } = new URL(req.url);
     const role = searchParams.get('role');
@@ -26,7 +35,7 @@ export async function GET(req: NextRequest) {
       employees = employees.filter((e) => e.role === 'DIRECTOR');
     }
 
-    return NextResponse.json({ employees });
+    return NextResponse.json({ employees: employees.map(publicEmployee) });
   } catch (error: any) {
     console.error('Employees retrieval error:', error);
     return NextResponse.json({ error: 'Failed to fetch employees' }, { status: 500 });
@@ -34,6 +43,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireSession('DIRECTOR');
+  if (auth.error) return auth.error;
   try {
     const body = await req.json();
     const validated = createEmployeeSchema.parse(body);
@@ -48,7 +59,7 @@ export async function POST(req: NextRequest) {
       phoneNumber: validated.phoneNumber,
     });
 
-    return NextResponse.json({ success: true, employee: newEmployee }, { status: 201 });
+    return NextResponse.json({ success: true, employee: publicEmployee(newEmployee) }, { status: 201 });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message || 'Invalid data' }, { status: 400 });
@@ -59,6 +70,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const auth = requireSession('DIRECTOR');
+  if (auth.error) return auth.error;
   try {
     const { searchParams } = new URL(req.url);
     let id = searchParams.get('id');
@@ -78,6 +91,10 @@ export async function DELETE(req: NextRequest) {
 
     const allEmployees = await getEmployees();
     const target = allEmployees.find((e) => e.id === id || e.employeeCode === id);
+
+    if (target && (target.id === auth.user.id || target.employeeCode === auth.user.employeeCode)) {
+      return NextResponse.json({ error: 'You cannot remove your own account.' }, { status: 400 });
+    }
 
     if (target?.role === 'DIRECTOR') {
       const remainingDirectors = allEmployees.filter((e) => e.role === 'DIRECTOR');
