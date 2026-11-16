@@ -236,6 +236,10 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         name: string;
         designation: string;
         activeTasks: number;
+        todo: number;
+        inProgress: number;
+        blocked: number;
+        overdue: number;
         urgent: number;
         high: number;
         medium: number;
@@ -251,6 +255,10 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         name: (emp.fullName || 'Staff').split(' ')[0],
         designation: emp.designation || 'Staff',
         activeTasks: 0,
+        todo: 0,
+        inProgress: 0,
+        blocked: 0,
+        overdue: 0,
         urgent: 0,
         high: 0,
         medium: 0,
@@ -263,6 +271,10 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
         const key = t.assignedTo.employeeCode || t.assignedTo.id;
         if (workloadMap[key]) {
           workloadMap[key].activeTasks += 1;
+          if (t.status === 'TO_DO') workloadMap[key].todo += 1;
+          if (t.status === 'IN_PROGRESS') workloadMap[key].inProgress += 1;
+          if (t.status === 'BLOCKED') workloadMap[key].blocked += 1;
+          if (isOverdue(t)) workloadMap[key].overdue += 1;
           if (t.priority === 'URGENT') workloadMap[key].urgent += 1;
           if (t.priority === 'HIGH') workloadMap[key].high += 1;
           if (t.priority === 'MEDIUM') workloadMap[key].medium += 1;
@@ -594,6 +606,25 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
     }
   };
 
+  // Workload bars: show that employee's tasks (all statuses) and bring the list into view
+  const applyEmployeeFilter = (code: string) => {
+    const next = selectedEmployeeFilter === code ? null : code;
+    setSelectedEmployeeFilter(next);
+    if (next) {
+      setSelectedStatus('ALL');
+      setSearchTerm('');
+      requestAnimationFrame(() => taskListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }
+  };
+  const selectedEmployeeName =
+    employeeList.find((e) => e.employeeCode === selectedEmployeeFilter || e.id === selectedEmployeeFilter)?.fullName ||
+    selectedEmployeeFilter;
+  const clearAllFilters = () => {
+    setSelectedStatus('ALL');
+    setSelectedEmployeeFilter(null);
+    setSearchTerm('');
+  };
+
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) || null : null;
 
   // Custom Interactive Tooltip for Workload Bar Chart
@@ -610,8 +641,14 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
           </div>
           <div className="text-[11px] text-slate-400">{data.designation}</div>
           <div className="flex items-center justify-between pt-1 font-semibold">
-            <span>Active Delegations:</span>
+            <span>Open tasks:</span>
             <span className="text-blue-400 font-bold text-sm">{data.activeTasks}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-300">
+            <div>Assigned: <span className="font-bold" style={{ color: STATUS_CONFIG.TO_DO.chartColor }}>{data.todo}</span></div>
+            <div>In Progress: <span className="font-bold text-sky-400">{data.inProgress}</span></div>
+            <div>Blocked: <span className="text-rose-400 font-bold">{data.blocked}</span></div>
+            <div>Overdue: <span className="text-amber-400 font-bold">{data.overdue}</span></div>
           </div>
           <div className="grid grid-cols-2 gap-1 text-[10px] pt-1 text-slate-300 border-t border-slate-800">
             <div>Urgent: <span className="text-rose-400 font-bold">{data.urgent}</span></div>
@@ -620,7 +657,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
             <div>Low: <span className="text-slate-400 font-bold">{data.low}</span></div>
           </div>
           <div className="text-[10px] text-blue-300 pt-1 italic font-medium">
-            👉 Click bar to filter this employee
+            👉 Click bar to see this employee&apos;s tasks
           </div>
         </div>
       );
@@ -828,7 +865,7 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                 onClick={() => setSelectedEmployeeFilter(null)}
                 className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-lg border border-blue-200 hover:bg-blue-100 transition"
               >
-                <span>Filter: {selectedEmployeeFilter}</span>
+                <span>Showing: {selectedEmployeeName}</span>
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
@@ -838,22 +875,35 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={analytics.workloadData}
+                className="cursor-pointer"
                 onClick={(entry: any) => {
-                  if (entry && entry.activePayload && entry.activePayload.length) {
-                    const code = entry.activePayload[0].payload.code;
-                    setSelectedEmployeeFilter(selectedEmployeeFilter === code ? null : code);
-                  }
+                  const code = entry?.activePayload?.[0]?.payload?.code;
+                  if (code) applyEmployeeFilter(code);
                 }}
               >
                 <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} tickLine={false} />
                 <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
                 <Tooltip content={<CustomWorkloadTooltip />} cursor={{ fill: 'rgba(2, 132, 199, 0.08)' }} />
-                <Bar
-                  dataKey="activeTasks"
-                  fill="#0284c7"
-                  radius={[8, 8, 0, 0]}
-                  className="cursor-pointer transition-opacity hover:opacity-85"
+                <Legend
+                  iconType="circle"
+                  iconSize={8}
+                  formatter={(value) => <span className="text-xs text-slate-600 font-medium">{value}</span>}
                 />
+                {([
+                  ['todo', 'Assigned', STATUS_CONFIG.TO_DO.chartColor],
+                  ['inProgress', 'In Progress', STATUS_CONFIG.IN_PROGRESS.chartColor],
+                  ['blocked', 'Blocked', STATUS_CONFIG.BLOCKED.chartColor],
+                ] as const).map(([key, label, color]) => (
+                  <Bar
+                    key={key}
+                    dataKey={key}
+                    name={label}
+                    stackId="workload"
+                    fill={color}
+                    maxBarSize={48}
+                    className="cursor-pointer transition-opacity hover:opacity-85"
+                  />
+                ))}
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -899,11 +949,51 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
                   ))}
                 </Pie>
                 <Tooltip content={<CustomStatusTooltip />} />
-                <Legend
-                  formatter={(value) => <span className="text-xs text-slate-600 font-medium">{value}</span>}
-                />
               </PieChart>
             </ResponsiveContainer>
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <span className="text-2xl font-bold text-slate-800">{analytics.total}</span>
+              <span className="text-[10px] text-slate-400 font-medium">tasks</span>
+            </div>
+          </div>
+
+          {/* Clickable legend: one row per status, plus overdue (open tasks past their due day) */}
+          <div className="grid grid-cols-2 gap-1.5">
+            {([
+              ['TO_DO', 'To-Do', analytics.todo, STATUS_CONFIG.TO_DO.chartColor],
+              ['IN_PROGRESS', 'In Progress', analytics.inProgress, STATUS_CONFIG.IN_PROGRESS.chartColor],
+              ['BLOCKED', 'Blocked', analytics.blocked, STATUS_CONFIG.BLOCKED.chartColor],
+              ['COMPLETED', 'Completed', analytics.completed, STATUS_CONFIG.COMPLETED.chartColor],
+            ] as const).map(([key, label, value, color]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => applyStatusFilter(key)}
+                className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg border transition text-left ${
+                  selectedStatus === key ? 'bg-slate-100 border-slate-300' : 'border-transparent hover:bg-slate-50'
+                }`}
+              >
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                <span className="text-slate-600 font-medium flex-1">{label}</span>
+                <span className="font-bold text-slate-800">{value}</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => applyStatusFilter('OVERDUE')}
+              className={`col-span-2 flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-lg border transition text-left ${
+                selectedStatus === 'OVERDUE'
+                  ? 'bg-amber-100 border-amber-400'
+                  : 'bg-amber-50 border-amber-200 hover:border-amber-300'
+              }`}
+            >
+              <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span className="text-amber-800 font-semibold flex-1">Overdue</span>
+              <span suppressHydrationWarning className="text-amber-700">
+                <span className="font-bold">{analytics.overdue}</span>
+                {' '}of {analytics.total - analytics.completed} open
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -982,7 +1072,20 @@ export default function DirectorDashboard({ initialTasks, employees, directorId 
             {filteredTasks.length === 0 ? (
               <div className="text-center py-16 text-slate-400 text-sm space-y-2">
                 <CheckCircle2 className="w-8 h-8 text-slate-300 mx-auto" />
-                <p>No tasks match your selected criteria.</p>
+                <p>
+                  {selectedEmployeeFilter && selectedStatus === 'ALL' && !searchTerm
+                    ? `No tasks for ${selectedEmployeeName} in this view.`
+                    : 'No tasks match your selected criteria.'}
+                </p>
+                {(selectedEmployeeFilter || selectedStatus !== 'ALL' || searchTerm) && (
+                  <button
+                    type="button"
+                    onClick={clearAllFilters}
+                    className="text-xs font-semibold text-blue-600 hover:underline"
+                  >
+                    Clear filters
+                  </button>
+                )}
               </div>
             ) : (
               filteredTasks.map((task) => (
